@@ -87,7 +87,7 @@ def build_standard_raw_df(
     timestamps: pd.Series | pd.DatetimeIndex,
     aggregate_values_w: pd.Series | np.ndarray,
 ) -> pd.DataFrame:
-    timestamp_series = pd.to_datetime(pd.Series(timestamps), errors="coerce")
+    timestamp_series = normalize_timestamp_series(pd.Series(timestamps))
     aggregate_series = pd.to_numeric(pd.Series(aggregate_values_w), errors="coerce")
     raw_df = pd.DataFrame(
         {
@@ -98,6 +98,15 @@ def build_standard_raw_df(
         }
     )
     return raw_df
+
+
+def normalize_timestamp_series(
+    timestamps: pd.Series | pd.DatetimeIndex,
+) -> pd.Series:
+    timestamp_series = pd.to_datetime(pd.Series(timestamps), errors="coerce")
+    if getattr(timestamp_series.dt, "tz", None) is not None:
+        timestamp_series = timestamp_series.dt.tz_convert("UTC").dt.tz_localize(None)
+    return timestamp_series
 
 
 def category_to_minutes(category: str) -> int:
@@ -325,7 +334,7 @@ def load_raw_house_data(file_path: Path) -> pd.DataFrame:
     for column in numeric_columns:
         raw_df[column] = pd.to_numeric(raw_df[column], errors="coerce")
 
-    raw_df["timestamp"] = pd.to_datetime(raw_df["Time"], errors="coerce")
+    raw_df["timestamp"] = normalize_timestamp_series(raw_df["Time"])
     raw_df["Issues"] = pd.to_numeric(raw_df["Issues"], errors="coerce").fillna(1).astype(int)
     return raw_df
 
@@ -458,6 +467,7 @@ def build_base_timeseries(
     summary["invalid_time_rows_removed"] = int(raw_df["timestamp"].isna().sum())
 
     cleaned_df = raw_df.loc[(raw_df["Issues"] != 1) & raw_df["timestamp"].notna()].copy()
+    cleaned_df["timestamp"] = normalize_timestamp_series(cleaned_df["timestamp"])
     cleaned_df = cleaned_df.sort_values("timestamp").reset_index(drop=True)
 
     summary["inferred_sampling_seconds"] = infer_sampling_seconds(cleaned_df["timestamp"])
