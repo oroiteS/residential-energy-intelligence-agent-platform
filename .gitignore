@@ -1,0 +1,77 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+*/.venv/
+.python-version
+*/.python-version
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+.pnpm-store/
+
+# Go / Build artifacts
+bin/
+coverage.out
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+*/.env
+*/.env.*
+!*/.env.example
+!*/.env.*.example
+*.local
+
+# Local tool metadata
+.claude/
+.codex
+CLAUDE.md
+AGENTS.md
+
+# Runtime data / generated outputs
+mysql_data/
+backend/outputs/
+backend/uploads/
+models/classification/TCN/output/
+models/forecast/LSTM/output/
+models/forecast/GPT/output/
+models_agent/checkpoints/
+
+# Generated datasets
+models/data/processed/
+
+# Local raw training datasets
+models/data/raw/
+
+# docx
+*/*.docx
+*/*.docs
+

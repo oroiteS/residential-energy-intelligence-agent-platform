@@ -1,0 +1,238 @@
+"""预处理命令行入口。"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from data.process.classification.builder import build_classification_dataset
+from data.process.common.base import build_base_dataset
+from data.process.forecast.builder import build_forecast_dataset
+from data.process.testing import export_representative_test_samples
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="居民用电项目数据预处理工具",
+        epilog=(
+            "常用命令示例:\n"
+            "  python main.py preprocess-base\n"
+            "  python main.py build-classification\n"
+            "  python main.py build-forecast\n"
+            "  python main.py run-all\n"
+            "\n"
+            "查看某个命令的详细帮助:\n"
+            "  python main.py preprocess-base -h"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, help="可执行的预处理子命令"
+    )
+
+    base_parser = subparsers.add_parser(
+        "preprocess-base",
+        help="生成15分钟基础时序数据",
+        description="从 raw 目录下支持的多数据源生成共享的 15 分钟基础时序数据。",
+    )
+    base_parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default=Path("data/raw"),
+        help="原始数据根目录或某个数据源目录，默认: %(default)s",
+    )
+    base_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/processed/base_15min"),
+        help="基础时序输出目录，默认: %(default)s",
+    )
+
+    classification_parser = subparsers.add_parser(
+        "build-classification",
+        help="生成分类任务数据",
+        description="从基础 15 分钟时序生成日级分类特征和规则标签。",
+    )
+    classification_parser.add_argument(
+        "--base-dir",
+        type=Path,
+        default=Path("data/processed/base_15min"),
+        help="基础时序目录，默认: %(default)s",
+    )
+    classification_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/processed/classification"),
+        help="分类数据输出目录，默认: %(default)s",
+    )
+
+    forecast_parser = subparsers.add_parser(
+        "build-forecast",
+        help="生成预测任务数据",
+        description="从基础 15 分钟时序生成 3 天输入到 1 天输出的预测样本。",
+    )
+    forecast_parser.add_argument(
+        "--base-dir",
+        type=Path,
+        default=Path("data/processed/base_15min"),
+        help="基础时序目录，默认: %(default)s",
+    )
+    forecast_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/processed/forecast"),
+        help="预测数据输出目录，默认: %(default)s",
+    )
+
+    export_parser = subparsers.add_parser(
+        "export-testing-samples",
+        help="导出前后端联调用的代表性测试样本",
+        description=(
+            "从已处理的 15 分钟基础时序和分类标签中，"
+            "为某个家庭导出约 5 份代表不同用电场景的测试 CSV。"
+        ),
+    )
+    export_parser.add_argument(
+        "--base-dir",
+        type=Path,
+        default=Path("data/processed/base_15min"),
+        help="基础时序目录，默认: %(default)s",
+    )
+    export_parser.add_argument(
+        "--labels-path",
+        type=Path,
+        default=Path("data/processed/classification/classification_day_labels.csv"),
+        help="分类标签文件路径，默认: %(default)s",
+    )
+    export_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/processed/testing_samples"),
+        help="测试样本输出目录，默认: %(default)s",
+    )
+    export_parser.add_argument(
+        "--house-id",
+        type=str,
+        default=None,
+        help="目标家庭编号，例如 refit_1、slovakia_1 或 house_refit_1；默认自动挑选标签最完整的家庭",
+    )
+    export_parser.add_argument(
+        "--count",
+        type=int,
+        default=5,
+        help="导出样本数量，默认: %(default)s",
+    )
+    export_parser.add_argument(
+        "--window-days",
+        type=int,
+        default=7,
+        help="每个样本保留的连续天数窗口，默认: %(default)s",
+    )
+
+    all_parser = subparsers.add_parser(
+        "run-all",
+        help="执行完整预处理流水线",
+        description="依次执行基础预处理、分类样本构造和预测样本构造。",
+    )
+    all_parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default=Path("data/raw"),
+        help="原始数据根目录或某个数据源目录，默认: %(default)s",
+    )
+    all_parser.add_argument(
+        "--base-dir",
+        type=Path,
+        default=Path("data/processed/base_15min"),
+        help="基础时序输出目录，默认: %(default)s",
+    )
+    all_parser.add_argument(
+        "--classification-dir",
+        type=Path,
+        default=Path("data/processed/classification"),
+        help="分类数据输出目录，默认: %(default)s",
+    )
+    all_parser.add_argument(
+        "--forecast-dir",
+        type=Path,
+        default=Path("data/processed/forecast"),
+        help="预测数据输出目录，默认: %(default)s",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    if len(sys.argv) == 1:
+        parser.print_help()
+        return
+    args = parser.parse_args()
+
+    if args.command == "preprocess-base":
+        summary_df = build_base_dataset(
+            input_dir=args.input_dir, output_dir=args.output_dir
+        )
+        print(f"已生成基础时序数据，家庭数量: {len(summary_df)}")
+        return
+
+    if args.command == "build-classification":
+        features_df, labels_df = build_classification_dataset(
+            base_dir=args.base_dir, output_dir=args.output_dir
+        )
+        print(f"已生成分类数据，样本数: {len(features_df)}，标签数: {len(labels_df)}")
+        return
+
+    if args.command == "build-forecast":
+        forecast_df = build_forecast_dataset(
+            base_dir=args.base_dir, output_dir=args.output_dir
+        )
+        print(f"已生成预测数据，样本数: {len(forecast_df)}")
+        return
+
+    if args.command == "export-testing-samples":
+        exported_samples = export_representative_test_samples(
+            base_dir=args.base_dir,
+            labels_path=args.labels_path,
+            output_dir=args.output_dir,
+            house_id=args.house_id,
+            count=args.count,
+            window_days=args.window_days,
+        )
+        if not exported_samples:
+            print("未导出任何测试样本")
+            return
+        print(
+            "已导出代表性测试样本，"
+            f"家庭: {exported_samples[0]['house_id']}，"
+            f"样本数: {len(exported_samples)}，"
+            f"输出目录: {exported_samples[0]['output_dir']}"
+        )
+        return
+
+    if args.command == "run-all":
+        summary_df = build_base_dataset(
+            input_dir=args.input_dir, output_dir=args.base_dir
+        )
+        features_df, _ = build_classification_dataset(
+            base_dir=args.base_dir, output_dir=args.classification_dir
+        )
+        forecast_df = build_forecast_dataset(
+            base_dir=args.base_dir, output_dir=args.forecast_dir
+        )
+        print(
+            "完整流水线执行完成，"
+            f"家庭数量: {len(summary_df)}，"
+            f"分类样本数: {len(features_df)}，"
+            f"预测样本数: {len(forecast_df)}"
+        )
+        return
+
+    raise ValueError(f"未知命令: {args.command}")
+
+
+if __name__ == "__main__":
+    main()

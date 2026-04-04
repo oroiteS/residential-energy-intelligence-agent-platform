@@ -1,0 +1,21 @@
+# LangChain / OpenAI-compatible 智能体配置
+# 说明：
+# 1. 环境变量优先级高于本文件
+# 2. 本文件适合本地开发和单机调试
+# 3. 若不填写对应值，智能体接口会自动降级
+
+llm:
+  # OpenAI-compatible 接口地址，例如：https://api.openai.com/v1
+  base_url: "https://cch.oroite.site/v1"
+
+  # API 密钥
+  api_key: "sk-55dce11dca12d65f145de547a81507d6"
+
+  # 模型名称，例如：gpt-4o-mini / deepseek-chat
+  model: "gpt-5.4"
+
+  # 温度参数，建议 0.0 ~ 0.3
+  temperature: 0.2
+
+  # 请求超时时间（秒）
+  timeout_seconds: 60

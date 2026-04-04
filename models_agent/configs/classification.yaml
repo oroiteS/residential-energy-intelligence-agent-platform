@@ -1,0 +1,18 @@
+# 分类模型本地推理配置
+
+model:
+  input_channels: 3
+  num_classes: 4
+  channel_sizes:
+    - 64
+    - 128
+    - 256
+  kernel_size: 3
+  dropout: 0.2
+
+train:
+  output_dir: "checkpoints/classification"
+
+predict:
+  checkpoint_path: "checkpoints/classification/best_model.pt"
+  batch_size: 128

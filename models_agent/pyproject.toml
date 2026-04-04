@@ -1,0 +1,19 @@
+[project]
+name = "models-agent"
+version = "0.1.0"
+description = "居民用电分析项目的 Robyn Python 后端"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=1.2.14",
+    "langchain-openai>=1.1.12",
+    "matplotlib>=3.10.8",
+    "numpy>=2.2.0",
+    "pandas>=2.3.3",
+    "pyyaml>=6.0.2",
+    "robyn>=0.82.1",
+    "torch>=2.7.1",
+    "torchaudio>=2.7.1",
+    "torchvision>=0.22.1",
+]
+

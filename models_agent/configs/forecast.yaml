@@ -1,0 +1,19 @@
+# 预测模型本地推理配置
+
+data:
+  feature_names:
+    - "aggregate"
+
+model:
+  input_size: 1
+  hidden_size: 256
+  num_layers: 3
+  dropout: 0.2
+  target_length: 96
+
+train:
+  output_dir: "../models/forecast/LSTM/output"
+
+predict:
+  checkpoint_path: "../models/forecast/LSTM/output/best_model.pt"
+  batch_size: 128

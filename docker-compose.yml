@@ -1,0 +1,23 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: mysql-dev
+    restart: always
+    environment:
+      # 设置 root 密码
+      MYSQL_ROOT_PASSWORD: root
+      # 启动时自动创建一个数据库
+      MYSQL_DATABASE: resident
+    ports:
+      - "3306:3306"
+    volumes:
+      # 将数据持久化到当前目录下的 mysql_data 文件夹
+      - ./mysql_data:/var/lib/mysql
+      # 首次启动时自动执行建表脚本
+      - ./doc/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
