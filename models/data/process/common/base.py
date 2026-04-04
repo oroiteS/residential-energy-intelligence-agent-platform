@@ -205,6 +205,9 @@ def load_opensynth_sources(
         ) from exc
 
     for parquet_path in parquet_files:
+        if "15m" not in parquet_path.stem.lower():
+            continue
+
         parquet_file = pq.ParquetFile(parquet_path)
         group_progress = ProgressBar(
             label=f"OpenSynth 子序列 {parquet_path.name}",
@@ -227,6 +230,7 @@ def load_opensynth_sources(
                 return flushed_key or ("", ""), None
 
             series_id, category = current_key
+            flushed_key = current_key
             interval_minutes = category_to_minutes(category)
             if interval_minutes != 15:
                 current_key = None
