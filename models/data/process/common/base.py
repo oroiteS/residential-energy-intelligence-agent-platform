@@ -864,6 +864,13 @@ def load_base_dataset(base_dir: Path) -> pd.DataFrame:
     return base_df.sort_values(["house_id", "timestamp"]).reset_index(drop=True)
 
 
+def load_base_file(base_file: Path) -> pd.DataFrame:
+    base_df = pd.read_csv(base_file, parse_dates=["timestamp"])
+    base_df["date"] = pd.to_datetime(base_df["date"]).dt.date
+    base_df["house_id"] = base_df["house_id"].astype(str)
+    return base_df.sort_values(["house_id", "timestamp"]).reset_index(drop=True)
+
+
 def select_complete_days(base_df: pd.DataFrame) -> pd.DataFrame:
     required_quality_columns = {
         "is_imputed_point",

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from data.process.common.base import load_base_dataset, select_complete_days
+from data.process.common.base import list_base_files, load_base_file, select_complete_days
 from data.process.common.progress import ProgressBar, log_stage
 
 
@@ -91,23 +91,49 @@ def _build_forecast_record(
     return record
 
 
+def _write_rows(
+    rows: list[dict[str, object]],
+    output_path: Path,
+    write_header: bool,
+) -> bool:
+    if not rows:
+        return write_header
+
+    pd.DataFrame(rows).to_csv(
+        output_path,
+        index=False,
+        mode="w" if write_header else "a",
+        header=write_header,
+    )
+    return False
+
+
 def build_forecast_dataset(base_dir: Path, output_dir: Path) -> pd.DataFrame:
-    log_stage("加载基础时序并筛选完整日样本")
-    base_df = load_base_dataset(base_dir)
-    complete_days_df = select_complete_days(base_df)
-    if complete_days_df.empty:
-        raise ValueError("基础数据中没有可用于预测任务的完整日样本")
+    base_files = list_base_files(base_dir)
+    if not base_files:
+        raise FileNotFoundError(f"未在 {base_dir} 找到基础15分钟数据文件")
 
-    sample_records: list[dict[str, object]] = []
-    house_groups = list(complete_days_df.groupby("house_id", sort=True))
-    house_progress = ProgressBar("构造预测样本", total=len(house_groups), unit="家庭")
+    log_stage("按家庭构造预测样本")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    forecast_path = output_dir / "forecast_samples.csv"
+    summary_records: list[dict[str, object]] = []
+    write_header = True
+    house_progress = ProgressBar("构造预测样本", total=len(base_files), unit="家庭")
 
-    for house_id, house_df in house_groups:
+    for base_file in base_files:
+        base_df = load_base_file(base_file)
+        complete_days_df = select_complete_days(base_df)
+        if complete_days_df.empty:
+            house_progress.update(detail=f"{base_file.stem}（无完整日）")
+            continue
+
+        house_id = str(complete_days_df["house_id"].iloc[0])
         day_groups = [
             (date_value, day_df.copy())
-            for date_value, day_df in house_df.groupby("date", sort=True)
+            for date_value, day_df in complete_days_df.groupby("date", sort=True)
         ]
         generated_count = 0
+        house_sample_records: list[dict[str, object]] = []
         for start_index in range(len(day_groups) - 3):
             window = day_groups[start_index : start_index + 4]
             dates = [day for day, _ in window]
@@ -116,19 +142,28 @@ def build_forecast_dataset(base_dir: Path, output_dir: Path) -> pd.DataFrame:
 
             input_days = window[:3]
             target_day = window[3]
-            sample_records.append(
-                _build_forecast_record(
-                    house_id=house_id,
-                    input_days=input_days,
-                    target_day=target_day,
-                )
+            sample_record = _build_forecast_record(
+                house_id=house_id,
+                input_days=input_days,
+                target_day=target_day,
+            )
+            house_sample_records.append(sample_record)
+            summary_records.append(
+                {
+                    "sample_id": str(sample_record["sample_id"]),
+                    "house_id": house_id,
+                    "input_start": str(sample_record["input_start"]),
+                    "target_start": str(sample_record["target_start"]),
+                }
             )
             generated_count += 1
+
+        write_header = _write_rows(house_sample_records, forecast_path, write_header)
         house_progress.update(detail=f"{house_id}，样本数 {generated_count}")
     house_progress.finish()
 
-    forecast_df = pd.DataFrame(sample_records).sort_values(["house_id", "input_start"]).reset_index(drop=True)
-    log_stage("写出预测数据文件")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    forecast_df.to_csv(output_dir / "forecast_samples.csv", index=False)
+    if not summary_records:
+        raise ValueError("基础数据中没有可用于预测任务的完整连续窗口样本")
+
+    forecast_df = pd.DataFrame(summary_records).sort_values(["house_id", "input_start"]).reset_index(drop=True)
     return forecast_df
