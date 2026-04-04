@@ -734,8 +734,10 @@ def build_base_dataset(
     skip_existing: bool = False,
 ) -> pd.DataFrame:
     output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "quality_summary.csv"
     summaries: list[dict[str, object]] = []
     processed_source_count = 0
+    skipped_existing_count = 0
 
     refit_dir = resolve_source_dir(input_dir, REFIT_SUBDIR_NAME) or input_dir
     refit_files = sorted(refit_dir.glob(RAW_FILE_GLOB))
@@ -746,6 +748,7 @@ def build_base_dataset(
             house_id = f"refit_{extract_house_id(raw_file)}"
             output_file = output_dir / f"house_{house_id}_base_15min.csv"
             if skip_existing and output_file.exists():
+                skipped_existing_count += 1
                 refit_progress.update(detail=f"{house_id}（跳过）")
                 continue
             raw_df = load_raw_house_data(raw_file)
@@ -773,6 +776,7 @@ def build_base_dataset(
         for source_dataset, house_id, raw_aggregate_unit, raw_df in load_ukdale_sources(input_dir):
             output_file = output_dir / f"house_{house_id}_base_15min.csv"
             if skip_existing and output_file.exists():
+                skipped_existing_count += 1
                 ukdale_progress.update(detail=f"{house_id}（跳过）")
                 continue
             base_df, summary = build_base_timeseries(
@@ -800,6 +804,7 @@ def build_base_dataset(
             for source_dataset, house_id, raw_aggregate_unit, raw_df in load_slovakia_sources(input_dir):
                 output_file = output_dir / f"house_{house_id}_base_15min.csv"
                 if skip_existing and output_file.exists():
+                    skipped_existing_count += 1
                     slovakia_progress.update(detail=f"{house_id}（跳过）")
                     continue
                 base_df, summary = build_base_timeseries(
@@ -824,6 +829,7 @@ def build_base_dataset(
             ):
                 output_file = output_dir / f"house_{house_id}_base_15min.csv"
                 if skip_existing and output_file.exists():
+                    skipped_existing_count += 1
                     continue
                 base_df, summary = build_base_timeseries(
                     raw_df=raw_df,
@@ -835,15 +841,36 @@ def build_base_dataset(
                 summaries.append(summary)
                 processed_source_count += 1
 
-    if processed_source_count == 0:
+    if processed_source_count == 0 and skipped_existing_count == 0:
         raise FileNotFoundError(
             f"未在 {input_dir} 找到可用原始数据。"
             "当前支持的数据源目录包括 refit、ukdale、"
             "slovakia_households_1000、opensynth_tudelft_electricity_consumption_1_0"
         )
 
-    summary_df = pd.DataFrame(summaries).sort_values("house_id").reset_index(drop=True)
-    summary_df.to_csv(output_dir / "quality_summary.csv", index=False)
+    summary_frames: list[pd.DataFrame] = []
+    if summary_path.exists():
+        summary_frames.append(pd.read_csv(summary_path))
+    if summaries:
+        summary_frames.append(pd.DataFrame(summaries))
+
+    if summary_frames:
+        summary_df = pd.concat(summary_frames, ignore_index=True)
+        if "house_id" in summary_df.columns:
+            summary_df = summary_df.drop_duplicates(subset=["house_id"], keep="last")
+            summary_df = summary_df.sort_values("house_id").reset_index(drop=True)
+    else:
+        existing_base_files = list_base_files(output_dir)
+        summary_df = pd.DataFrame(
+            {
+                "house_id": [
+                    base_file.name.removeprefix("house_").removesuffix("_base_15min.csv")
+                    for base_file in existing_base_files
+                ]
+            }
+        ).sort_values("house_id").reset_index(drop=True)
+
+    summary_df.to_csv(summary_path, index=False)
     return summary_df
 
 
