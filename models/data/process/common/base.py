@@ -186,7 +186,9 @@ def load_slovakia_sources(input_dir: Path) -> Iterator[tuple[str, str, str, pd.D
         yield ("slovakia_households_1000", f"slovakia_{meter_id}", "kW", raw_df)
 
 
-def load_opensynth_sources(input_dir: Path) -> Iterator[tuple[str, str, str, pd.DataFrame]]:
+def load_opensynth_sources(
+    input_dir: Path,
+) -> Iterator[tuple[str, str, str, pd.DataFrame]]:
     opensynth_dir = resolve_source_dir(input_dir, OPENSYNTH_SUBDIR_NAME)
     if opensynth_dir is None:
         return
@@ -225,11 +227,17 @@ def load_opensynth_sources(input_dir: Path) -> Iterator[tuple[str, str, str, pd.
                 return flushed_key or ("", ""), None
 
             series_id, category = current_key
+            interval_minutes = category_to_minutes(category)
+            if interval_minutes != 15:
+                current_key = None
+                current_timestamps = []
+                current_targets = []
+                return flushed_key, None
             flushed_key = current_key
             expanded_timestamps, expanded_values_w = expand_interval_energy_to_15min_power(
                 timestamps=pd.Series(current_timestamps),
                 energy_kwh=pd.Series(current_targets, dtype=float),
-                interval_minutes=category_to_minutes(category),
+                interval_minutes=interval_minutes,
             )
             current_key = None
             current_timestamps = []
@@ -715,18 +723,27 @@ def build_base_timeseries(
     return base_df, summary
 
 
-def build_base_dataset(input_dir: Path, output_dir: Path) -> pd.DataFrame:
+def build_base_dataset(
+    input_dir: Path,
+    output_dir: Path,
+    allowed_sources: set[str] | None = None,
+    skip_existing: bool = False,
+) -> pd.DataFrame:
     output_dir.mkdir(parents=True, exist_ok=True)
     summaries: list[dict[str, object]] = []
     processed_source_count = 0
 
     refit_dir = resolve_source_dir(input_dir, REFIT_SUBDIR_NAME) or input_dir
     refit_files = sorted(refit_dir.glob(RAW_FILE_GLOB))
-    if refit_files:
+    if refit_files and (allowed_sources is None or "refit" in allowed_sources):
         log_stage("处理 REFIT 原始数据")
         refit_progress = ProgressBar("REFIT 基础预处理", total=len(refit_files), unit="家庭")
         for raw_file in refit_files:
             house_id = f"refit_{extract_house_id(raw_file)}"
+            output_file = output_dir / f"house_{house_id}_base_15min.csv"
+            if skip_existing and output_file.exists():
+                refit_progress.update(detail=f"{house_id}（跳过）")
+                continue
             raw_df = load_raw_house_data(raw_file)
             base_df, summary = build_base_timeseries(
                 raw_df=raw_df,
@@ -734,7 +751,6 @@ def build_base_dataset(input_dir: Path, output_dir: Path) -> pd.DataFrame:
                 source_dataset="refit",
                 raw_aggregate_unit="W",
             )
-            output_file = output_dir / f"house_{house_id}_base_15min.csv"
             base_df.to_csv(output_file, index=False)
             summaries.append(summary)
             processed_source_count += 1
@@ -742,18 +758,25 @@ def build_base_dataset(input_dir: Path, output_dir: Path) -> pd.DataFrame:
         refit_progress.finish()
 
     ukdale_dir = resolve_source_dir(input_dir, UKDALE_SUBDIR_NAME)
-    if ukdale_dir is not None and (ukdale_dir / "ukdale.h5").exists():
+    if (
+        ukdale_dir is not None
+        and (ukdale_dir / "ukdale.h5").exists()
+        and (allowed_sources is None or "ukdale" in allowed_sources)
+    ):
         log_stage("处理 UKDALE 原始数据")
         meter_keys = _list_ukdale_meter_keys(ukdale_dir / "ukdale.h5")
         ukdale_progress = ProgressBar("UKDALE 基础预处理", total=len(meter_keys), unit="家庭")
         for source_dataset, house_id, raw_aggregate_unit, raw_df in load_ukdale_sources(input_dir):
+            output_file = output_dir / f"house_{house_id}_base_15min.csv"
+            if skip_existing and output_file.exists():
+                ukdale_progress.update(detail=f"{house_id}（跳过）")
+                continue
             base_df, summary = build_base_timeseries(
                 raw_df=raw_df,
                 house_id=house_id,
                 source_dataset=source_dataset,
                 raw_aggregate_unit=raw_aggregate_unit,
             )
-            output_file = output_dir / f"house_{house_id}_base_15min.csv"
             base_df.to_csv(output_file, index=False)
             summaries.append(summary)
             processed_source_count += 1
@@ -763,7 +786,7 @@ def build_base_dataset(input_dir: Path, output_dir: Path) -> pd.DataFrame:
     slovakia_dir = resolve_source_dir(input_dir, SLOVAKIA_SUBDIR_NAME)
     if slovakia_dir is not None:
         slovakia_files = sorted(slovakia_dir.glob("meters_*_measurement.json"))
-        if slovakia_files:
+        if slovakia_files and (allowed_sources is None or "slovakia" in allowed_sources):
             log_stage("处理斯洛伐克 1000 户数据")
             slovakia_progress = ProgressBar(
                 "Slovakia 基础预处理",
@@ -771,13 +794,16 @@ def build_base_dataset(input_dir: Path, output_dir: Path) -> pd.DataFrame:
                 unit="家庭",
             )
             for source_dataset, house_id, raw_aggregate_unit, raw_df in load_slovakia_sources(input_dir):
+                output_file = output_dir / f"house_{house_id}_base_15min.csv"
+                if skip_existing and output_file.exists():
+                    slovakia_progress.update(detail=f"{house_id}（跳过）")
+                    continue
                 base_df, summary = build_base_timeseries(
                     raw_df=raw_df,
                     house_id=house_id,
                     source_dataset=source_dataset,
                     raw_aggregate_unit=raw_aggregate_unit,
                 )
-                output_file = output_dir / f"house_{house_id}_base_15min.csv"
                 base_df.to_csv(output_file, index=False)
                 summaries.append(summary)
                 processed_source_count += 1
@@ -787,16 +813,20 @@ def build_base_dataset(input_dir: Path, output_dir: Path) -> pd.DataFrame:
     opensynth_dir = resolve_source_dir(input_dir, OPENSYNTH_SUBDIR_NAME)
     if opensynth_dir is not None:
         parquet_files = sorted(opensynth_dir.rglob("*.parquet"))
-        if parquet_files:
+        if parquet_files and (allowed_sources is None or "opensynth" in allowed_sources):
             log_stage("处理 OpenSynth 多源整合数据")
-            for source_dataset, house_id, raw_aggregate_unit, raw_df in load_opensynth_sources(input_dir):
+            for source_dataset, house_id, raw_aggregate_unit, raw_df in load_opensynth_sources(
+                input_dir,
+            ):
+                output_file = output_dir / f"house_{house_id}_base_15min.csv"
+                if skip_existing and output_file.exists():
+                    continue
                 base_df, summary = build_base_timeseries(
                     raw_df=raw_df,
                     house_id=house_id,
                     source_dataset=source_dataset,
                     raw_aggregate_unit=raw_aggregate_unit,
                 )
-                output_file = output_dir / f"house_{house_id}_base_15min.csv"
                 base_df.to_csv(output_file, index=False)
                 summaries.append(summary)
                 processed_source_count += 1
