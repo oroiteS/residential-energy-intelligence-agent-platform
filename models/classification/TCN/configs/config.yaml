@@ -1,0 +1,73 @@
+# 数据相关配置
+data:
+  # 分类样本文件路径，由预处理阶段生成
+  data_path: "data/processed/classification/classification_day_labels.csv"
+  # 训练集占比，剩余部分继续划分给验证集和测试集
+  train_ratio: 0.7
+  # 验证集占比，测试集占比 = 1 - train_ratio - val_ratio
+  val_ratio: 0.15
+
+# 模型结构配置
+model:
+  # 输入通道数，当前固定为 aggregate / active_appliance_count / burst_event_count
+  input_channels: 3
+  # 分类类别数，当前固定为 4 类
+  num_classes: 4
+  # TCN 每一层的卷积通道数，层数由列表长度决定
+  channel_sizes:
+    - 64
+    - 128
+    - 256
+  # 卷积核大小，控制局部感受野
+  kernel_size: 3
+  # Dropout 比例，用于缓解过拟合
+  dropout: 0.2
+
+# 训练配置
+train:
+  # 训练输出目录，保存 best_model.pt 和 training_summary.json
+  output_dir: "classification/TCN/output"
+  # 每个 batch 的样本数
+  batch_size: 128
+  # 训练轮数
+  epochs: 200
+  # 优化器类型，可选 adam / adamw
+  optimizer: "adam"
+  # 基础学习率
+  learning_rate: 0.001
+  # 权重衰减系数
+  weight_decay: 0.0001
+  # 随机种子，保证可复现
+  seed: 42
+  # 学习率调度器，可选 none / cosine_annealing_warm_restarts
+  scheduler: "none"
+  # 标签平滑系数，0 表示关闭
+  label_smoothing: 0.0
+  # CosineAnnealingWarmRestarts 的首次重启周期
+  scheduler_t0: 10
+  # CosineAnnealingWarmRestarts 的周期放大倍数
+  scheduler_t_mult: 2
+  # CosineAnnealingWarmRestarts 的最小学习率
+  scheduler_eta_min: 0.000001
+  # Early stopping 容忍轮数；连续这么多轮验证集 macro-F1 无明显提升就提前停止
+  early_stopping_patience: 25
+  # Early stopping 的最小提升阈值；只有 val_macro_f1 超过当前最优值这么多才算改进
+  early_stopping_min_delta: 0.0003
+
+# 测试配置
+test:
+  # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.pt
+  checkpoint_path: null
+  # 测试输出目录，保存 test_summary.json
+  output_dir: "classification/TCN/output"
+  # 测试时的 batch 大小
+  batch_size: 128
+
+# 推理配置
+predict:
+  # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.pt
+  checkpoint_path: null
+  # 推理输出目录，保存 prediction_results.csv 或 single_prediction.json
+  output_dir: "classification/TCN/output"
+  # 批量推理时的 batch 大小
+  batch_size: 128
