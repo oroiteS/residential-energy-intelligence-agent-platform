@@ -11,8 +11,8 @@ import torch
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecast.GPT.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
-from forecast.GPT.engine import (
+from forecast.transformer.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+from forecast.transformer.engine import (
     build_criterion,
     build_model,
     checkpoint_to_normalization,
@@ -88,4 +88,3 @@ def main(config_path: Path = DEFAULT_CONFIG_PATH) -> None:
 
 if __name__ == "__main__":
     main()
-

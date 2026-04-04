@@ -17,8 +17,8 @@ import torch
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecast.GPT.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
-from forecast.GPT.engine import (
+from forecast.transformer.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+from forecast.transformer.engine import (
     build_criterion,
     build_model,
     count_parameters,
@@ -147,18 +147,41 @@ def run_training(experiment_config) -> dict[str, object]:
     device_name = detect_device()
     device = torch.device(device_name)
 
+    print("[阶段] 开始准备 Transformer 训练", flush=True)
+    print(
+        f"[配置] data_path={experiment_config.data.data_path} "
+        f"split_mode={experiment_config.data.split_mode} "
+        f"batch_size={train_config.batch_size} "
+        f"device={device_name}",
+        flush=True,
+    )
+
+    print("[阶段] 加载并切分预测样本", flush=True)
     train_dataset, val_dataset, test_dataset = create_split_datasets(
         data_config=experiment_config.data,
         seed=train_config.seed,
     )
+    print(
+        f"[数据] train={len(train_dataset)} val={len(val_dataset)} test={len(test_dataset)}",
+        flush=True,
+    )
+
+    print("[阶段] 构建 DataLoader", flush=True)
     train_loader, val_loader, test_loader = create_data_loaders(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
         test_dataset=test_dataset,
         batch_size=train_config.batch_size,
     )
+    print(
+        f"[DataLoader] train_batches={len(train_loader)} "
+        f"val_batches={len(val_loader)} test_batches={len(test_loader)}",
+        flush=True,
+    )
 
+    print("[阶段] 初始化模型、损失函数与优化器", flush=True)
     model = build_model(model_config).to(device)
+    parameter_count = count_parameters(model)
     criterion = build_criterion(train_config)
     loss_name = describe_loss(train_config)
     optimizer = torch.optim.AdamW(
@@ -175,6 +198,11 @@ def run_training(experiment_config) -> dict[str, object]:
             patience=train_config.scheduler_patience,
             min_lr=train_config.scheduler_min_lr,
         )
+    print(
+        f"[模型] parameter_count={parameter_count} loss={loss_name} "
+        f"learning_rate={train_config.learning_rate}",
+        flush=True,
+    )
 
     best_val_rmse = float("inf")
     best_metrics: dict[str, float] = {}
@@ -186,6 +214,10 @@ def run_training(experiment_config) -> dict[str, object]:
     start_time = time.time()
 
     for epoch in range(1, train_config.epochs + 1):
+        print(
+            f"[阶段] Epoch {epoch}/{train_config.epochs} - 训练阶段",
+            flush=True,
+        )
         train_metrics = train_one_epoch(
             model=model,
             data_loader=train_loader,
@@ -193,12 +225,18 @@ def run_training(experiment_config) -> dict[str, object]:
             optimizer=optimizer,
             device=device,
             gradient_clip_norm=train_config.gradient_clip_norm,
+            stage_label=f"Epoch {epoch}/{train_config.epochs} 训练",
+        )
+        print(
+            f"[阶段] Epoch {epoch}/{train_config.epochs} - 验证阶段",
+            flush=True,
         )
         val_metrics = evaluate(
             model=model,
             data_loader=val_loader,
             criterion=criterion,
             device=device,
+            stage_label=f"Epoch {epoch}/{train_config.epochs} 验证",
         )
 
         epoch_record = {

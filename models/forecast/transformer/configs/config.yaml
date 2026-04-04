@@ -44,7 +44,7 @@ model:
 # 训练配置
 train:
   # 训练输出目录，保存 best_model.pt、training_summary.json 和 result.png
-  output_dir: "forecast/GPT/output"
+  output_dir: "forecast/transformer/output"
   # 每个 batch 的样本数；若显存不足可降到 32
   batch_size: 128
   # 训练轮数
@@ -79,7 +79,7 @@ test:
   # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.pt
   checkpoint_path: null
   # 测试输出目录，保存 test_summary.json
-  output_dir: "forecast/GPT/output"
+  output_dir: "forecast/transformer/output"
   # 测试时的 batch 大小
   batch_size: 128
 
@@ -88,6 +88,6 @@ predict:
   # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.pt
   checkpoint_path: null
   # 推理输出目录，保存 prediction.csv 或 prediction.json
-  output_dir: "forecast/GPT/output"
+  output_dir: "forecast/transformer/output"
   # 批量推理时的 batch 大小
   batch_size: 128
