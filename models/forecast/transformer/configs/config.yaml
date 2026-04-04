@@ -31,7 +31,7 @@ model:
   # 多头注意力头数
   num_heads: 4
   # 前馈层隐藏维度
-  ffn_dim: 512
+  ffn_dim: 256
   # dropout 比例
   dropout: 0.2
   # 预测步长，当前固定为 96
@@ -48,7 +48,7 @@ train:
   # 每个 batch 的样本数；若显存不足可降到 32
   batch_size: 32
   # 训练轮数
-  epochs: 50
+  epochs: 500
   # AdamW 学习率
   learning_rate: 0.0002
   # AdamW 权重衰减系数
