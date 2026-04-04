@@ -46,7 +46,7 @@ train:
   # 训练输出目录，保存 best_model.pt、training_summary.json 和 result.png
   output_dir: "forecast/transformer/output"
   # 每个 batch 的样本数；若显存不足可降到 32
-  batch_size: 128
+  batch_size: 32
   # 训练轮数
   epochs: 800
   # AdamW 学习率
@@ -81,7 +81,7 @@ test:
   # 测试输出目录，保存 test_summary.json
   output_dir: "forecast/transformer/output"
   # 测试时的 batch 大小
-  batch_size: 128
+  batch_size: 256
 
 # 推理配置
 predict:
@@ -90,4 +90,4 @@ predict:
   # 推理输出目录，保存 prediction.csv 或 prediction.json
   output_dir: "forecast/transformer/output"
   # 批量推理时的 batch 大小
-  batch_size: 128
+  batch_size: 256
