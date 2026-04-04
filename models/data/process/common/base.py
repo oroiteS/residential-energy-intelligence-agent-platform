@@ -195,54 +195,106 @@ def load_opensynth_sources(input_dir: Path) -> Iterator[tuple[str, str, str, pd.
     if not parquet_files:
         return
 
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise RuntimeError(
+            "读取 OpenSynth parquet 需要安装 pyarrow 依赖"
+        ) from exc
+
     for parquet_path in parquet_files:
-        try:
-            parquet_df = pd.read_parquet(
-                parquet_path,
-                columns=["id", "datetime", "target", "category"],
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "读取 OpenSynth parquet 需要安装 pyarrow 或 fastparquet"
-            ) from exc
-
-        if parquet_df.empty:
-            continue
-
-        parquet_df["id"] = parquet_df["id"].astype(str)
-        parquet_df["category"] = parquet_df["category"].astype(str)
-        parquet_df["datetime"] = pd.to_datetime(parquet_df["datetime"], errors="coerce")
-        parquet_df["target"] = pd.to_numeric(parquet_df["target"], errors="coerce")
-        parquet_df = parquet_df.dropna(subset=["id", "category", "datetime", "target"])
-
-        group_items = list(parquet_df.groupby(["id", "category"], sort=True))
+        parquet_file = pq.ParquetFile(parquet_path)
         group_progress = ProgressBar(
             label=f"OpenSynth 子序列 {parquet_path.name}",
-            total=len(group_items),
+            total=None,
             unit="序列",
         )
-        for (series_id, category), series_df in group_items:
-            interval_minutes = category_to_minutes(category)
+
+        current_key: tuple[str, str] | None = None
+        current_timestamps: list[pd.Timestamp] = []
+        current_targets: list[float] = []
+        emitted_keys: set[tuple[str, str]] = set()
+
+        def flush_current_series() -> tuple[tuple[str, str], tuple[str, str, str, pd.DataFrame] | None]:
+            nonlocal current_key, current_timestamps, current_targets
+            if current_key is None or not current_timestamps:
+                flushed_key = current_key
+                current_key = None
+                current_timestamps = []
+                current_targets = []
+                return flushed_key or ("", ""), None
+
+            series_id, category = current_key
+            flushed_key = current_key
             expanded_timestamps, expanded_values_w = expand_interval_energy_to_15min_power(
-                timestamps=series_df["datetime"],
-                energy_kwh=series_df["target"],
-                interval_minutes=interval_minutes,
+                timestamps=pd.Series(current_timestamps),
+                energy_kwh=pd.Series(current_targets, dtype=float),
+                interval_minutes=category_to_minutes(category),
             )
+            current_key = None
+            current_timestamps = []
+            current_targets = []
             if len(expanded_values_w) == 0:
-                continue
+                return flushed_key, None
 
             house_id = f"opensynth_{sanitize_identifier(series_id)}_{sanitize_identifier(category)}"
             raw_df = build_standard_raw_df(
                 timestamps=expanded_timestamps,
                 aggregate_values_w=expanded_values_w,
             )
-            yield (
+            return flushed_key, (
                 "opensynth_tudelft_electricity_consumption_1_0",
                 house_id,
                 "kWh_per_interval",
                 raw_df,
             )
-            group_progress.update(detail=house_id)
+
+        for batch in parquet_file.iter_batches(
+            columns=["id", "datetime", "target", "category"],
+            batch_size=200_000,
+        ):
+            batch_df = batch.to_pandas()
+            if batch_df.empty:
+                continue
+
+            batch_df["id"] = batch_df["id"].astype(str)
+            batch_df["category"] = batch_df["category"].astype(str)
+            batch_df["datetime"] = pd.to_datetime(batch_df["datetime"], errors="coerce")
+            batch_df["target"] = pd.to_numeric(batch_df["target"], errors="coerce")
+            batch_df = batch_df.dropna(subset=["id", "category", "datetime", "target"])
+            if batch_df.empty:
+                continue
+
+            id_values = batch_df["id"].to_numpy(dtype=object)
+            category_values = batch_df["category"].to_numpy(dtype=object)
+            datetime_values = batch_df["datetime"].tolist()
+            target_values = batch_df["target"].astype(float).tolist()
+
+            for index, series_id in enumerate(id_values):
+                key = (str(series_id), str(category_values[index]))
+                if current_key is None:
+                    current_key = key
+                elif key != current_key:
+                    if key in emitted_keys:
+                        raise ValueError(
+                            f"OpenSynth 文件 {parquet_path.name} 的序列不是按 id/category 连续存储，"
+                            "当前流式实现无法安全处理该文件。"
+                        )
+                    flushed_key, flushed = flush_current_series()
+                    if flushed is not None:
+                        emitted_keys.add(flushed_key)
+                        yield flushed
+                        group_progress.update(detail=flushed[1])
+                    current_key = key
+
+                current_timestamps.append(datetime_values[index])
+                current_targets.append(float(target_values[index]))
+
+        flushed_key, flushed = flush_current_series()
+        if flushed is not None:
+            emitted_keys.add(flushed_key)
+            yield flushed
+            group_progress.update(detail=flushed[1])
         group_progress.finish(detail=parquet_path.name)
 
 
@@ -737,68 +789,17 @@ def build_base_dataset(input_dir: Path, output_dir: Path) -> pd.DataFrame:
         parquet_files = sorted(opensynth_dir.rglob("*.parquet"))
         if parquet_files:
             log_stage("处理 OpenSynth 多源整合数据")
-            opensynth_progress = ProgressBar(
-                "OpenSynth 基础预处理",
-                total=len(parquet_files),
-                unit="文件",
-            )
-            processed_before = processed_source_count
-            for parquet_path in parquet_files:
-                parquet_input_dir = parquet_path.parent
-                # 仅处理当前 parquet 所在目录，避免重复扫描整个数据源目录
-                try:
-                    parquet_df = pd.read_parquet(
-                        parquet_path,
-                        columns=["id", "datetime", "target", "category"],
-                    )
-                except ImportError as exc:
-                    raise RuntimeError(
-                        "读取 OpenSynth parquet 需要安装 pyarrow 或 fastparquet"
-                    ) from exc
-                if parquet_df.empty:
-                    opensynth_progress.update(detail=parquet_path.name)
-                    continue
-                parquet_df["id"] = parquet_df["id"].astype(str)
-                parquet_df["category"] = parquet_df["category"].astype(str)
-                parquet_df["datetime"] = pd.to_datetime(parquet_df["datetime"], errors="coerce")
-                parquet_df["target"] = pd.to_numeric(parquet_df["target"], errors="coerce")
-                parquet_df = parquet_df.dropna(subset=["id", "category", "datetime", "target"])
-                group_items = list(parquet_df.groupby(["id", "category"], sort=True))
-                group_progress = ProgressBar(
-                    label=f"OpenSynth 子序列 {parquet_path.name}",
-                    total=len(group_items),
-                    unit="序列",
+            for source_dataset, house_id, raw_aggregate_unit, raw_df in load_opensynth_sources(input_dir):
+                base_df, summary = build_base_timeseries(
+                    raw_df=raw_df,
+                    house_id=house_id,
+                    source_dataset=source_dataset,
+                    raw_aggregate_unit=raw_aggregate_unit,
                 )
-                for (series_id, category), series_df in group_items:
-                    interval_minutes = category_to_minutes(category)
-                    expanded_timestamps, expanded_values_w = expand_interval_energy_to_15min_power(
-                        timestamps=series_df["datetime"],
-                        energy_kwh=series_df["target"],
-                        interval_minutes=interval_minutes,
-                    )
-                    if len(expanded_values_w) == 0:
-                        group_progress.update(detail=f"{series_id}_{category}")
-                        continue
-                    house_id = f"opensynth_{sanitize_identifier(series_id)}_{sanitize_identifier(category)}"
-                    raw_df = build_standard_raw_df(
-                        timestamps=expanded_timestamps,
-                        aggregate_values_w=expanded_values_w,
-                    )
-                    base_df, summary = build_base_timeseries(
-                        raw_df=raw_df,
-                        house_id=house_id,
-                        source_dataset="opensynth_tudelft_electricity_consumption_1_0",
-                        raw_aggregate_unit="kWh_per_interval",
-                    )
-                    output_file = output_dir / f"house_{house_id}_base_15min.csv"
-                    base_df.to_csv(output_file, index=False)
-                    summaries.append(summary)
-                    processed_source_count += 1
-                    group_progress.update(detail=house_id)
-                group_progress.finish(detail=parquet_path.name)
-                opensynth_progress.update(detail=parquet_path.name)
-            if processed_source_count > processed_before or parquet_files:
-                opensynth_progress.finish()
+                output_file = output_dir / f"house_{house_id}_base_15min.csv"
+                base_df.to_csv(output_file, index=False)
+                summaries.append(summary)
+                processed_source_count += 1
 
     if processed_source_count == 0:
         raise FileNotFoundError(
