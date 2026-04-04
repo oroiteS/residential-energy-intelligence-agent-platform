@@ -27,6 +27,7 @@ from data.process.common.constants import (
     SLOTS_PER_DAY,
     UKDALE_SUBDIR_NAME,
 )
+from data.process.common.progress import ProgressBar, log_stage
 
 REQUIRED_RAW_COLUMNS = {"Time", "Aggregate", "Issues"}
 HOUSE_ID_PATTERN = re.compile(r"House(\d+)", re.IGNORECASE)
@@ -204,7 +205,13 @@ def load_opensynth_sources(input_dir: Path) -> Iterator[tuple[str, str, str, pd.
         parquet_df["target"] = pd.to_numeric(parquet_df["target"], errors="coerce")
         parquet_df = parquet_df.dropna(subset=["id", "category", "datetime", "target"])
 
-        for (series_id, category), series_df in parquet_df.groupby(["id", "category"], sort=True):
+        group_items = list(parquet_df.groupby(["id", "category"], sort=True))
+        group_progress = ProgressBar(
+            label=f"OpenSynth 子序列 {parquet_path.name}",
+            total=len(group_items),
+            unit="序列",
+        )
+        for (series_id, category), series_df in group_items:
             interval_minutes = category_to_minutes(category)
             expanded_timestamps, expanded_values_w = expand_interval_energy_to_15min_power(
                 timestamps=series_df["datetime"],
@@ -225,6 +232,8 @@ def load_opensynth_sources(input_dir: Path) -> Iterator[tuple[str, str, str, pd.
                 "kWh_per_interval",
                 raw_df,
             )
+            group_progress.update(detail=house_id)
+        group_progress.finish(detail=parquet_path.name)
 
 
 def _find_ukdale_power_column(frame: pd.DataFrame) -> tuple[object, str] | None:
@@ -567,17 +576,148 @@ def build_base_dataset(input_dir: Path, output_dir: Path) -> pd.DataFrame:
     summaries: list[dict[str, object]] = []
     processed_source_count = 0
 
-    for source_dataset, house_id, raw_aggregate_unit, raw_df in collect_raw_sources(input_dir):
-        processed_source_count += 1
-        base_df, summary = build_base_timeseries(
-            raw_df=raw_df,
-            house_id=house_id,
-            source_dataset=source_dataset,
-            raw_aggregate_unit=raw_aggregate_unit,
-        )
-        output_file = output_dir / f"house_{house_id}_base_15min.csv"
-        base_df.to_csv(output_file, index=False)
-        summaries.append(summary)
+    refit_dir = resolve_source_dir(input_dir, REFIT_SUBDIR_NAME) or input_dir
+    refit_files = sorted(refit_dir.glob(RAW_FILE_GLOB))
+    if refit_files:
+        log_stage("处理 REFIT 原始数据")
+        refit_progress = ProgressBar("REFIT 基础预处理", total=len(refit_files), unit="家庭")
+        for raw_file in refit_files:
+            house_id = f"refit_{extract_house_id(raw_file)}"
+            raw_df = load_raw_house_data(raw_file)
+            base_df, summary = build_base_timeseries(
+                raw_df=raw_df,
+                house_id=house_id,
+                source_dataset="refit",
+                raw_aggregate_unit="W",
+            )
+            output_file = output_dir / f"house_{house_id}_base_15min.csv"
+            base_df.to_csv(output_file, index=False)
+            summaries.append(summary)
+            processed_source_count += 1
+            refit_progress.update(detail=house_id)
+        refit_progress.finish()
+
+    ukdale_dir = resolve_source_dir(input_dir, UKDALE_SUBDIR_NAME)
+    if ukdale_dir is not None and (ukdale_dir / "ukdale.h5").exists():
+        log_stage("处理 UKDALE 原始数据")
+        try:
+            store = pd.HDFStore(ukdale_dir / "ukdale.h5", mode="r")
+        except ImportError as exc:
+            raise RuntimeError(
+                "读取 UKDALE HDF5 需要安装 PyTables（tables）依赖"
+            ) from exc
+        with store:
+            meter_keys = sorted(
+                key
+                for key in store.keys()
+                if re.fullmatch(r"/building\d+/elec/meter1", key)
+            )
+        ukdale_progress = ProgressBar("UKDALE 基础预处理", total=len(meter_keys), unit="家庭")
+        for source_dataset, house_id, raw_aggregate_unit, raw_df in load_ukdale_sources(input_dir):
+            base_df, summary = build_base_timeseries(
+                raw_df=raw_df,
+                house_id=house_id,
+                source_dataset=source_dataset,
+                raw_aggregate_unit=raw_aggregate_unit,
+            )
+            output_file = output_dir / f"house_{house_id}_base_15min.csv"
+            base_df.to_csv(output_file, index=False)
+            summaries.append(summary)
+            processed_source_count += 1
+            ukdale_progress.update(detail=house_id)
+        ukdale_progress.finish()
+
+    slovakia_dir = resolve_source_dir(input_dir, SLOVAKIA_SUBDIR_NAME)
+    if slovakia_dir is not None:
+        slovakia_files = sorted(slovakia_dir.glob("meters_*_measurement.json"))
+        if slovakia_files:
+            log_stage("处理斯洛伐克 1000 户数据")
+            slovakia_progress = ProgressBar(
+                "Slovakia 基础预处理",
+                total=len(slovakia_files),
+                unit="家庭",
+            )
+            for source_dataset, house_id, raw_aggregate_unit, raw_df in load_slovakia_sources(input_dir):
+                base_df, summary = build_base_timeseries(
+                    raw_df=raw_df,
+                    house_id=house_id,
+                    source_dataset=source_dataset,
+                    raw_aggregate_unit=raw_aggregate_unit,
+                )
+                output_file = output_dir / f"house_{house_id}_base_15min.csv"
+                base_df.to_csv(output_file, index=False)
+                summaries.append(summary)
+                processed_source_count += 1
+                slovakia_progress.update(detail=house_id)
+            slovakia_progress.finish()
+
+    opensynth_dir = resolve_source_dir(input_dir, OPENSYNTH_SUBDIR_NAME)
+    if opensynth_dir is not None:
+        parquet_files = sorted(opensynth_dir.rglob("*.parquet"))
+        if parquet_files:
+            log_stage("处理 OpenSynth 多源整合数据")
+            opensynth_progress = ProgressBar(
+                "OpenSynth 基础预处理",
+                total=len(parquet_files),
+                unit="文件",
+            )
+            processed_before = processed_source_count
+            for parquet_path in parquet_files:
+                parquet_input_dir = parquet_path.parent
+                # 仅处理当前 parquet 所在目录，避免重复扫描整个数据源目录
+                try:
+                    parquet_df = pd.read_parquet(
+                        parquet_path,
+                        columns=["id", "datetime", "target", "category"],
+                    )
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "读取 OpenSynth parquet 需要安装 pyarrow 或 fastparquet"
+                    ) from exc
+                if parquet_df.empty:
+                    opensynth_progress.update(detail=parquet_path.name)
+                    continue
+                parquet_df["id"] = parquet_df["id"].astype(str)
+                parquet_df["category"] = parquet_df["category"].astype(str)
+                parquet_df["datetime"] = pd.to_datetime(parquet_df["datetime"], errors="coerce")
+                parquet_df["target"] = pd.to_numeric(parquet_df["target"], errors="coerce")
+                parquet_df = parquet_df.dropna(subset=["id", "category", "datetime", "target"])
+                group_items = list(parquet_df.groupby(["id", "category"], sort=True))
+                group_progress = ProgressBar(
+                    label=f"OpenSynth 子序列 {parquet_path.name}",
+                    total=len(group_items),
+                    unit="序列",
+                )
+                for (series_id, category), series_df in group_items:
+                    interval_minutes = category_to_minutes(category)
+                    expanded_timestamps, expanded_values_w = expand_interval_energy_to_15min_power(
+                        timestamps=series_df["datetime"],
+                        energy_kwh=series_df["target"],
+                        interval_minutes=interval_minutes,
+                    )
+                    if len(expanded_values_w) == 0:
+                        group_progress.update(detail=f"{series_id}_{category}")
+                        continue
+                    house_id = f"opensynth_{sanitize_identifier(series_id)}_{sanitize_identifier(category)}"
+                    raw_df = build_standard_raw_df(
+                        timestamps=expanded_timestamps,
+                        aggregate_values_w=expanded_values_w,
+                    )
+                    base_df, summary = build_base_timeseries(
+                        raw_df=raw_df,
+                        house_id=house_id,
+                        source_dataset="opensynth_tudelft_electricity_consumption_1_0",
+                        raw_aggregate_unit="kWh_per_interval",
+                    )
+                    output_file = output_dir / f"house_{house_id}_base_15min.csv"
+                    base_df.to_csv(output_file, index=False)
+                    summaries.append(summary)
+                    processed_source_count += 1
+                    group_progress.update(detail=house_id)
+                group_progress.finish(detail=parquet_path.name)
+                opensynth_progress.update(detail=parquet_path.name)
+            if processed_source_count > processed_before or parquet_files:
+                opensynth_progress.finish()
 
     if processed_source_count == 0:
         raise FileNotFoundError(
@@ -596,10 +736,12 @@ def load_base_dataset(base_dir: Path) -> pd.DataFrame:
     if not base_files:
         raise FileNotFoundError(f"未在 {base_dir} 找到基础15分钟数据文件")
 
-    dataframes = [
-        pd.read_csv(base_file, parse_dates=["timestamp"])
-        for base_file in base_files
-    ]
+    progress = ProgressBar("加载基础时序数据", total=len(base_files), unit="文件")
+    dataframes: list[pd.DataFrame] = []
+    for base_file in base_files:
+        dataframes.append(pd.read_csv(base_file, parse_dates=["timestamp"]))
+        progress.update(detail=base_file.name)
+    progress.finish()
     base_df = pd.concat(dataframes, ignore_index=True)
     base_df["date"] = pd.to_datetime(base_df["date"]).dt.date
     base_df["house_id"] = base_df["house_id"].astype(str)
