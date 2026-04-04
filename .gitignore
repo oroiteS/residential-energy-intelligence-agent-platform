@@ -75,3 +75,4 @@ models/data/raw/
 */*.docx
 */*.docs
 
+*.zip
