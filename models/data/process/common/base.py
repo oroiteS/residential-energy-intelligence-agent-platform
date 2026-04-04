@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 import json
 from pathlib import Path
+import pickle
 import re
 from typing import Iterable, Iterator
 
@@ -272,6 +273,100 @@ def _find_ukdale_power_column(frame: pd.DataFrame) -> tuple[object, str] | None:
     return None
 
 
+def _decode_pytables_attr(value: object) -> object:
+    if isinstance(value, np.bytes_):
+        value = bytes(value)
+
+    if isinstance(value, bytes):
+        for decoder in (
+            lambda raw: pickle.loads(raw),
+            lambda raw: raw.decode("utf-8"),
+            lambda raw: raw.decode("latin1"),
+        ):
+            try:
+                return decoder(value)
+            except Exception:
+                continue
+        return value
+
+    if isinstance(value, list):
+        return [_decode_pytables_attr(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_decode_pytables_attr(item) for item in value)
+    return value
+
+
+def _list_ukdale_meter_keys(h5_path: Path) -> list[str]:
+    try:
+        import tables
+    except ImportError as exc:
+        raise RuntimeError(
+            "读取 UKDALE HDF5 需要安装 PyTables（tables）依赖"
+        ) from exc
+
+    meter_keys: list[str] = []
+    with tables.open_file(h5_path, mode="r") as handle:
+        for group in handle.walk_groups("/"):
+            if re.fullmatch(r"/building\d+/elec/meter1", group._v_pathname):
+                meter_keys.append(group._v_pathname)
+    return sorted(meter_keys)
+
+
+def _load_ukdale_meter_frame(h5_path: Path, meter_key: str) -> pd.DataFrame:
+    try:
+        import tables
+    except ImportError as exc:
+        raise RuntimeError(
+            "读取 UKDALE HDF5 需要安装 PyTables（tables）依赖"
+        ) from exc
+
+    with tables.open_file(h5_path, mode="r") as handle:
+        group = handle.get_node(meter_key)
+        table_node = handle.get_node(f"{meter_key}/table")
+        rows = table_node.read()
+        attrs = group._v_attrs
+
+    if len(rows) == 0:
+        return pd.DataFrame()
+
+    raw_columns = _decode_pytables_attr(getattr(attrs, "non_index_axes", []))
+    if raw_columns and isinstance(raw_columns[0], tuple) and len(raw_columns[0]) > 1:
+        columns = list(raw_columns[0][1])
+    else:
+        columns = []
+
+    value_columns = _decode_pytables_attr(getattr(attrs, "values_cols", []))
+    value_columns = [str(column) for column in value_columns]
+    frame_dict: dict[object, np.ndarray] = {}
+    column_offset = 0
+
+    for value_column in value_columns:
+        values = rows[value_column]
+        if values.ndim == 1:
+            values_2d = values.reshape(-1, 1)
+        else:
+            values_2d = values
+
+        width = values_2d.shape[1]
+        assigned_columns = columns[column_offset : column_offset + width]
+        if len(assigned_columns) != width:
+            assigned_columns = [f"{value_column}_{index}" for index in range(width)]
+
+        for index, column_name in enumerate(assigned_columns):
+            frame_dict[column_name] = values_2d[:, index]
+        column_offset += width
+
+    meter_frame = pd.DataFrame(frame_dict)
+    if columns and all(isinstance(column_name, tuple) for column_name in frame_dict):
+        meter_frame.columns = pd.MultiIndex.from_tuples(list(frame_dict.keys()))
+    else:
+        meter_frame.columns = list(frame_dict.keys())
+
+    meter_frame.index = pd.to_datetime(rows["index"], errors="coerce", utc=True)
+    meter_frame.index = meter_frame.index.tz_convert("UTC").tz_localize(None)
+    return meter_frame
+
+
 def load_ukdale_sources(input_dir: Path) -> Iterator[tuple[str, str, str, pd.DataFrame]]:
     ukdale_dir = resolve_source_dir(input_dir, UKDALE_SUBDIR_NAME)
     if ukdale_dir is None:
@@ -281,35 +376,22 @@ def load_ukdale_sources(input_dir: Path) -> Iterator[tuple[str, str, str, pd.Dat
     if not h5_path.exists():
         return
 
-    try:
-        store = pd.HDFStore(h5_path, mode="r")
-    except ImportError as exc:
-        raise RuntimeError(
-            "读取 UKDALE HDF5 需要安装 PyTables（tables）依赖"
-        ) from exc
+    meter_keys = _list_ukdale_meter_keys(h5_path)
+    for meter_key in meter_keys:
+        meter_frame = _load_ukdale_meter_frame(h5_path, meter_key)
+        column_info = _find_ukdale_power_column(meter_frame)
+        if column_info is None:
+            continue
 
-    with store:
-        meter_keys = sorted(
-            key
-            for key in store.keys()
-            if re.fullmatch(r"/building\d+/elec/meter1", key)
+        power_column, measurement = column_info
+        aggregate_series = pd.to_numeric(meter_frame[power_column], errors="coerce")
+        timestamps = pd.Series(pd.to_datetime(meter_frame.index, errors="coerce"))
+        raw_df = build_standard_raw_df(
+            timestamps=timestamps,
+            aggregate_values_w=aggregate_series.to_numpy(dtype=float),
         )
-
-        for meter_key in meter_keys:
-            meter_frame = store[meter_key]
-            column_info = _find_ukdale_power_column(meter_frame)
-            if column_info is None:
-                continue
-
-            power_column, measurement = column_info
-            aggregate_series = pd.to_numeric(meter_frame[power_column], errors="coerce")
-            timestamps = pd.Series(pd.to_datetime(meter_frame.index, errors="coerce"))
-            raw_df = build_standard_raw_df(
-                timestamps=timestamps,
-                aggregate_values_w=aggregate_series.to_numpy(dtype=float),
-            )
-            building_id = meter_key.split("/")[1].removeprefix("building")
-            yield (f"ukdale_{measurement}", f"ukdale_{building_id}", "W", raw_df)
+        building_id = meter_key.split("/")[1].removeprefix("building")
+        yield (f"ukdale_{measurement}", f"ukdale_{building_id}", "W", raw_df)
 
 
 def collect_raw_sources(input_dir: Path) -> Iterator[tuple[str, str, str, pd.DataFrame]]:
@@ -610,18 +692,7 @@ def build_base_dataset(input_dir: Path, output_dir: Path) -> pd.DataFrame:
     ukdale_dir = resolve_source_dir(input_dir, UKDALE_SUBDIR_NAME)
     if ukdale_dir is not None and (ukdale_dir / "ukdale.h5").exists():
         log_stage("处理 UKDALE 原始数据")
-        try:
-            store = pd.HDFStore(ukdale_dir / "ukdale.h5", mode="r")
-        except ImportError as exc:
-            raise RuntimeError(
-                "读取 UKDALE HDF5 需要安装 PyTables（tables）依赖"
-            ) from exc
-        with store:
-            meter_keys = sorted(
-                key
-                for key in store.keys()
-                if re.fullmatch(r"/building\d+/elec/meter1", key)
-            )
+        meter_keys = _list_ukdale_meter_keys(ukdale_dir / "ukdale.h5")
         ukdale_progress = ProgressBar("UKDALE 基础预处理", total=len(meter_keys), unit="家庭")
         for source_dataset, house_id, raw_aggregate_unit, raw_df in load_ukdale_sources(input_dir):
             base_df, summary = build_base_timeseries(
