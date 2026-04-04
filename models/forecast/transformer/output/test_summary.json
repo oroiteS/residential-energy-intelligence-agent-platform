@@ -1,0 +1,71 @@
+{
+  "checkpoint_path": "/root/reiap/models/forecast/transformer/output/best_model.pt",
+  "metrics": {
+    "mae": 212.11361694335938,
+    "rmse": 456.3739318847656,
+    "smape": 47.29912567138672,
+    "wape": 20.55586814880371,
+    "loss": 0.33518090125203587,
+    "elapsed_seconds": 2.0425572395324707
+  },
+  "config": {
+    "data": {
+      "data_path": "/root/reiap/models/data/processed/forecast/forecast_samples.csv",
+      "split_mode": "by_house",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "feature_names": [
+        "aggregate",
+        "slot_sin",
+        "slot_cos",
+        "weekday_sin",
+        "weekday_cos"
+      ],
+      "aggregate_normalization": "input_window",
+      "aggregate_norm_eps": 1e-06
+    },
+    "model": {
+      "input_size": 5,
+      "d_model": 128,
+      "num_layers": 4,
+      "num_heads": 4,
+      "ffn_dim": 512,
+      "dropout": 0.1,
+      "target_length": 96,
+      "patch_length": 16,
+      "patch_stride": 8
+    },
+    "train": {
+      "output_dir": "/root/reiap/models/forecast/transformer/output",
+      "batch_size": 32,
+      "epochs": 800,
+      "learning_rate": 0.0002,
+      "weight_decay": 0.0001,
+      "gradient_clip_norm": 1.0,
+      "seed": 42,
+      "early_stopping_patience": 25,
+      "early_stopping_min_delta": 0.0001,
+      "loss_name": "huber",
+      "huber_delta": 1.0,
+      "scheduler_mode": "plateau",
+      "scheduler_factor": 0.5,
+      "scheduler_patience": 5,
+      "scheduler_min_lr": 1e-05
+    },
+    "test": {
+      "checkpoint_path": null,
+      "output_dir": "/root/reiap/models/forecast/transformer/output",
+      "batch_size": 256
+    },
+    "predict": {
+      "checkpoint_path": null,
+      "output_dir": "/root/reiap/models/forecast/transformer/output",
+      "batch_size": 256
+    }
+  },
+  "runtime": {
+    "device": "cuda",
+    "loss": "HuberLoss(delta=1.0)",
+    "aggregate_normalization": "input_window"
+  }
+}

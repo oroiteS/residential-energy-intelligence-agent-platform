@@ -62,7 +62,7 @@ backend/outputs/
 backend/uploads/
 models/classification/TCN/output/
 models/forecast/LSTM/output/
-models/forecast/GPT/output/
+!models/forecast/transformer/output/
 models_agent/checkpoints/
 
 # Generated datasets
@@ -76,3 +76,5 @@ models/data/raw/
 */*.docs
 
 *.zip
+*.tar.gz
+*.rar
