@@ -8,6 +8,7 @@ import pandas as pd
 
 from data.process.common.base import load_base_dataset, select_complete_days
 from data.process.common.constants import DAY_END_SLOT, DAY_START_SLOT
+from data.process.common.progress import ProgressBar, log_stage
 
 
 def _build_daily_feature_record(house_id: str, day: pd.Timestamp, day_df: pd.DataFrame) -> dict[str, object]:
@@ -71,6 +72,7 @@ def _assign_rule_label(
 
 
 def build_classification_dataset(base_dir: Path, output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    log_stage("加载基础时序并筛选完整日样本")
     base_df = load_base_dataset(base_dir)
     complete_days_df = select_complete_days(base_df)
     if complete_days_df.empty:
@@ -78,8 +80,10 @@ def build_classification_dataset(base_dir: Path, output_dir: Path) -> tuple[pd.D
 
     feature_records: list[dict[str, object]] = []
     label_stats_records: list[dict[str, object]] = []
+    day_groups = list(complete_days_df.groupby(["house_id", "date"], sort=True))
+    progress = ProgressBar("构造分类样本", total=len(day_groups), unit="日样本")
 
-    for (house_id, date_value), day_df in complete_days_df.groupby(["house_id", "date"], sort=True):
+    for (house_id, date_value), day_df in day_groups:
         feature_records.append(_build_daily_feature_record(house_id=house_id, day=date_value, day_df=day_df))
         label_stats_records.append(
             {
@@ -89,6 +93,8 @@ def build_classification_dataset(base_dir: Path, output_dir: Path) -> tuple[pd.D
                 **_compute_label_stats(day_df),
             }
         )
+        progress.update(detail=f"{house_id}_{date_value.isoformat()}")
+    progress.finish()
 
     features_df = pd.DataFrame(feature_records).sort_values(["house_id", "date"]).reset_index(drop=True)
     stats_df = pd.DataFrame(label_stats_records).sort_values(["house_id", "date"]).reset_index(drop=True)
@@ -118,6 +124,7 @@ def build_classification_dataset(base_dir: Path, output_dir: Path) -> tuple[pd.D
         how="inner",
     )
 
+    log_stage("写出分类数据文件")
     output_dir.mkdir(parents=True, exist_ok=True)
     features_df.to_csv(output_dir / "classification_day_features.csv", index=False)
     labels_df.to_csv(output_dir / "classification_day_labels.csv", index=False)

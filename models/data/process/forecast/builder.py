@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from data.process.common.base import load_base_dataset, select_complete_days
+from data.process.common.progress import ProgressBar, log_stage
 
 
 def _build_forecast_record(
@@ -91,18 +92,22 @@ def _build_forecast_record(
 
 
 def build_forecast_dataset(base_dir: Path, output_dir: Path) -> pd.DataFrame:
+    log_stage("加载基础时序并筛选完整日样本")
     base_df = load_base_dataset(base_dir)
     complete_days_df = select_complete_days(base_df)
     if complete_days_df.empty:
         raise ValueError("基础数据中没有可用于预测任务的完整日样本")
 
     sample_records: list[dict[str, object]] = []
+    house_groups = list(complete_days_df.groupby("house_id", sort=True))
+    house_progress = ProgressBar("构造预测样本", total=len(house_groups), unit="家庭")
 
-    for house_id, house_df in complete_days_df.groupby("house_id", sort=True):
+    for house_id, house_df in house_groups:
         day_groups = [
             (date_value, day_df.copy())
             for date_value, day_df in house_df.groupby("date", sort=True)
         ]
+        generated_count = 0
         for start_index in range(len(day_groups) - 3):
             window = day_groups[start_index : start_index + 4]
             dates = [day for day, _ in window]
@@ -118,8 +123,12 @@ def build_forecast_dataset(base_dir: Path, output_dir: Path) -> pd.DataFrame:
                     target_day=target_day,
                 )
             )
+            generated_count += 1
+        house_progress.update(detail=f"{house_id}，样本数 {generated_count}")
+    house_progress.finish()
 
     forecast_df = pd.DataFrame(sample_records).sort_values(["house_id", "input_start"]).reset_index(drop=True)
+    log_stage("写出预测数据文件")
     output_dir.mkdir(parents=True, exist_ok=True)
     forecast_df.to_csv(output_dir / "forecast_samples.csv", index=False)
     return forecast_df
