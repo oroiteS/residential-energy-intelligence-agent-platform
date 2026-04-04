@@ -15,6 +15,17 @@ from data.process.forecast.builder import build_forecast_dataset
 from data.process.testing import export_representative_test_samples
 
 
+def _parse_csv_set(raw_value: str | None) -> set[str] | None:
+    if raw_value is None:
+        return None
+    values = {
+        item.strip().lower()
+        for item in raw_value.split(",")
+        if item.strip()
+    }
+    return values or None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="居民用电项目数据预处理工具",
@@ -50,6 +61,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("data/processed/base_15min"),
         help="基础时序输出目录，默认: %(default)s",
+    )
+    base_parser.add_argument(
+        "--sources",
+        type=str,
+        default="refit,ukdale,slovakia,opensynth",
+        help="要处理的数据源，逗号分隔；可选: refit,ukdale,slovakia,opensynth",
+    )
+    base_parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="若基础时序文件已存在则跳过，可用于断点续跑",
     )
 
     classification_parser = subparsers.add_parser(
@@ -162,6 +184,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("data/processed/forecast"),
         help="预测数据输出目录，默认: %(default)s",
     )
+    all_parser.add_argument(
+        "--sources",
+        type=str,
+        default="refit,ukdale,slovakia,opensynth",
+        help="要处理的数据源，逗号分隔；可选: refit,ukdale,slovakia,opensynth",
+    )
+    all_parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="若基础时序文件已存在则跳过，可用于断点续跑",
+    )
     return parser
 
 
@@ -174,7 +207,10 @@ def main() -> None:
 
     if args.command == "preprocess-base":
         summary_df = build_base_dataset(
-            input_dir=args.input_dir, output_dir=args.output_dir
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            allowed_sources=_parse_csv_set(args.sources),
+            skip_existing=args.skip_existing,
         )
         print(f"已生成基础时序数据，家庭数量: {len(summary_df)}")
         return
@@ -215,7 +251,10 @@ def main() -> None:
 
     if args.command == "run-all":
         summary_df = build_base_dataset(
-            input_dir=args.input_dir, output_dir=args.base_dir
+            input_dir=args.input_dir,
+            output_dir=args.base_dir,
+            allowed_sources=_parse_csv_set(args.sources),
+            skip_existing=args.skip_existing,
         )
         features_df, _ = build_classification_dataset(
             base_dir=args.base_dir, output_dir=args.classification_dir
