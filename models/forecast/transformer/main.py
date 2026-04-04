@@ -9,10 +9,10 @@ import sys
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecast.GPT.config import DEFAULT_CONFIG_PATH
-from forecast.GPT.predict import main as predict_main
-from forecast.GPT.test import main as test_main
-from forecast.GPT.train import main as train_main
+from forecast.transformer.config import DEFAULT_CONFIG_PATH
+from forecast.transformer.predict import main as predict_main
+from forecast.transformer.test import main as test_main
+from forecast.transformer.train import main as train_main
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,11 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Decoder-only Transformer 预测任务统一入口，可选择训练、测试或推理模式。",
         epilog=(
             "常用命令示例:\n"
-            "  python forecast/GPT/main.py train\n"
-            "  python forecast/GPT/main.py test\n"
-            "  python forecast/GPT/main.py predict --input forecast/GPT/output/predict_input.json\n"
-            "  python forecast/GPT/main.py train --config forecast/GPT/configs/config.yaml\n"
-            "  python forecast/GPT/main.py predict --input data.csv --output forecast/GPT/output/prediction.csv"
+            "  python forecast/transformer/main.py train\n"
+            "  python forecast/transformer/main.py test\n"
+            "  python forecast/transformer/main.py predict --input forecast/transformer/output/predict_input.json\n"
+            "  python forecast/transformer/main.py train --config forecast/transformer/configs/config.yaml\n"
+            "  python forecast/transformer/main.py predict --input data.csv --output forecast/transformer/output/prediction.csv"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -105,4 +105,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

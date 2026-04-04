@@ -7,8 +7,8 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from forecast.GPT.config import DataConfig, ModelConfig, TrainConfig
-from forecast.GPT.model import PatchDirectTransformerForecaster
+from forecast.transformer.config import DataConfig, ModelConfig, TrainConfig
+from forecast.transformer.model import PatchDirectTransformerForecaster
 from forecast.LSTM.dataset import ForecastDataset, ForecastNormalizationStats
 from forecast.LSTM.engine import (
     checkpoint_to_normalization,
@@ -82,31 +82,63 @@ def _denormalize(
     return tensor * denorm_std + denorm_mean
 
 
+def _should_log_batch(
+    batch_index: int,
+    total_batches: int,
+    log_interval: int | None,
+) -> bool:
+    if total_batches <= 0:
+        return False
+    if batch_index == 1 or batch_index == total_batches:
+        return True
+    if log_interval is None:
+        log_interval = max(1, total_batches // 10)
+    return batch_index % max(1, log_interval) == 0
+
+
 def evaluate(
     model: nn.Module,
     data_loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    stage_label: str = "验证",
+    log_interval: int | None = None,
 ) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
+    total_samples = 0
     predictions: list[np.ndarray] = []
     targets: list[np.ndarray] = []
     denorm_means: list[np.ndarray] = []
     denorm_stds: list[np.ndarray] = []
+    total_batches = len(data_loader)
+
+    print(f"[{stage_label}] 开始，共 {total_batches} 个 batch", flush=True)
 
     with torch.no_grad():
-        for features, labels, batch_denorm_mean, batch_denorm_std in data_loader:
+        for batch_index, (features, labels, batch_denorm_mean, batch_denorm_std) in enumerate(
+            data_loader,
+            start=1,
+        ):
             features = features.to(device)
             labels = labels.to(device)
 
             outputs = model(features)
             loss = criterion(outputs, labels)
             total_loss += float(loss.item()) * len(labels)
+            total_samples += len(labels)
             predictions.append(outputs.cpu().numpy())
             targets.append(labels.cpu().numpy())
             denorm_means.append(batch_denorm_mean.cpu().numpy())
             denorm_stds.append(batch_denorm_std.cpu().numpy())
+
+            if _should_log_batch(batch_index, total_batches, log_interval):
+                average_loss = total_loss / max(1, total_samples)
+                print(
+                    f"[{stage_label}] batch {batch_index}/{total_batches} "
+                    f"avg_loss={average_loss:.4f}",
+                    flush=True,
+                )
 
     y_pred = np.concatenate(predictions, axis=0)
     y_true = np.concatenate(targets, axis=0)
@@ -126,15 +158,24 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     gradient_clip_norm: float | None = None,
+    stage_label: str = "训练",
+    log_interval: int | None = None,
 ) -> dict[str, float]:
     model.train()
     total_loss = 0.0
+    total_samples = 0
     predictions: list[np.ndarray] = []
     targets: list[np.ndarray] = []
     denorm_means: list[np.ndarray] = []
     denorm_stds: list[np.ndarray] = []
+    total_batches = len(data_loader)
 
-    for features, labels, batch_denorm_mean, batch_denorm_std in data_loader:
+    print(f"[{stage_label}] 开始，共 {total_batches} 个 batch", flush=True)
+
+    for batch_index, (features, labels, batch_denorm_mean, batch_denorm_std) in enumerate(
+        data_loader,
+        start=1,
+    ):
         features = features.to(device)
         labels = labels.to(device)
 
@@ -150,10 +191,19 @@ def train_one_epoch(
         optimizer.step()
 
         total_loss += float(loss.item()) * len(labels)
+        total_samples += len(labels)
         predictions.append(outputs.detach().cpu().numpy())
         targets.append(labels.cpu().numpy())
         denorm_means.append(batch_denorm_mean.cpu().numpy())
         denorm_stds.append(batch_denorm_std.cpu().numpy())
+
+        if _should_log_batch(batch_index, total_batches, log_interval):
+            average_loss = total_loss / max(1, total_samples)
+            print(
+                f"[{stage_label}] batch {batch_index}/{total_batches} "
+                f"avg_loss={average_loss:.4f}",
+                flush=True,
+            )
 
     y_pred = np.concatenate(predictions, axis=0)
     y_true = np.concatenate(targets, axis=0)

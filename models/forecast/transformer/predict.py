@@ -15,9 +15,9 @@ from torch.utils.data import DataLoader, Dataset
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecast.GPT.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
-from forecast.GPT.constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
-from forecast.GPT.engine import build_model, checkpoint_to_normalization, load_checkpoint, save_json_summary
+from forecast.transformer.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+from forecast.transformer.constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
+from forecast.transformer.engine import build_model, checkpoint_to_normalization, load_checkpoint, save_json_summary
 from forecast.LSTM.dataset import (
     DEFAULT_NORMALIZATION_MODE,
     FEATURE_COLUMN_MAP,

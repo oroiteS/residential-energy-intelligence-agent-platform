@@ -9,7 +9,7 @@ import yaml
 
 from common.config_validation import validate_config_schema
 from common.device import detect_device
-from forecast.GPT.constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
+from forecast.transformer.constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "config.yaml"
