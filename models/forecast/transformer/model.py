@@ -12,7 +12,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from forecast.transformer.constants import INPUT_LENGTH, TARGET_LENGTH
+from forecast.LSTM.constants import INPUT_LENGTH, TARGET_LENGTH
 
 
 class PatchDirectTransformerForecaster(nn.Module):
