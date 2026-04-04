@@ -256,7 +256,7 @@ def run_training(experiment_config) -> dict[str, object]:
         history.append(epoch_record)
 
         if scheduler is not None:
-            scheduler.step(val_metrics["loss"])
+            scheduler.step(val_metrics["rmse"])
 
         print(
             f"epoch={epoch:02d} "

@@ -27,13 +27,13 @@ model:
   # token 隐表示维度
   d_model: 128
   # Transformer block 层数
-  num_layers: 4
+  num_layers: 2
   # 多头注意力头数
   num_heads: 4
   # 前馈层隐藏维度
   ffn_dim: 512
   # dropout 比例
-  dropout: 0.1
+  dropout: 0.2
   # 预测步长，当前固定为 96
   target_length: 96
   # patch 长度，16 个 15min 点约等于 4 小时
@@ -65,11 +65,11 @@ train:
   loss_name: "huber"
   # HuberLoss 的 delta，仅在 loss_name=huber 时生效
   huber_delta: 1.0
-  # 学习率调度器；plateau 表示验证集 loss 停滞时自动降学习率
+  # 学习率调度器；plateau 表示验证集 RMSE 停滞时自动降学习率
   scheduler_mode: "plateau"
   # 学习率衰减系数，新学习率 = 旧学习率 * scheduler_factor
   scheduler_factor: 0.5
-  # 验证集 loss 连续多少轮无改善后触发降学习率
+  # 验证集 RMSE 连续多少轮无改善后触发降学习率
   scheduler_patience: 5
   # 学习率下界
   scheduler_min_lr: 1.0e-5
