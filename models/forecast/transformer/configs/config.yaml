@@ -48,7 +48,7 @@ train:
   # 每个 batch 的样本数；若显存不足可降到 32
   batch_size: 32
   # 训练轮数
-  epochs: 800
+  epochs: 50
   # AdamW 学习率
   learning_rate: 0.0002
   # AdamW 权重衰减系数
@@ -60,7 +60,7 @@ train:
   # Early stopping 容忍轮数；给 direct multi-step 模型多一点收敛空间
   early_stopping_patience: 25
   # Early stopping 的最小改进阈值
-  early_stopping_min_delta: 0.0001
+  early_stopping_min_delta: 0.0000
   # 损失函数，支持 mse / huber
   loss_name: "huber"
   # HuberLoss 的 delta，仅在 loss_name=huber 时生效
