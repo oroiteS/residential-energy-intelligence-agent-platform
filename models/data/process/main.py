@@ -77,7 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
     classification_parser = subparsers.add_parser(
         "build-classification",
         help="生成分类任务数据",
-        description="从基础 15 分钟时序生成日级分类特征和规则标签。",
+        description=(
+            "从基础 15 分钟时序生成日级分类特征和规则标签。"
+            "分类特征固定为 96x5：aggregate、slot_sin、slot_cos、weekday_sin、weekday_cos。"
+        ),
     )
     classification_parser.add_argument(
         "--base-dir",
@@ -219,7 +222,12 @@ def main() -> None:
         features_df, labels_df = build_classification_dataset(
             base_dir=args.base_dir, output_dir=args.output_dir
         )
-        print(f"已生成分类数据，样本数: {len(features_df)}，标签数: {len(labels_df)}")
+        print(
+            "已生成分类数据，"
+            f"样本数: {len(features_df)}，"
+            f"标签数: {len(labels_df)}，"
+            "特征维度: 96x5"
+        )
         return
 
     if args.command == "build-forecast":
@@ -266,7 +274,8 @@ def main() -> None:
             "完整流水线执行完成，"
             f"家庭数量: {len(summary_df)}，"
             f"分类样本数: {len(features_df)}，"
-            f"预测样本数: {len(forecast_df)}"
+            f"预测样本数: {len(forecast_df)}，"
+            "分类特征维度: 96x5"
         )
         return
 

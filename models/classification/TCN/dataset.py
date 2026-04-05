@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from classification.TCN.constants import INPUT_CHANNELS, LABELS, SEQUENCE_LENGTH
+from classification.TCN.constants import FEATURE_NAMES, INPUT_CHANNELS, LABELS, SEQUENCE_LENGTH
 
 LABEL_TO_INDEX = {label: index for index, label in enumerate(LABELS)}
 INDEX_TO_LABEL = {index: label for label, index in LABEL_TO_INDEX.items()}
@@ -22,8 +22,22 @@ def _build_feature_columns(prefix: str, length: int) -> list[str]:
 
 
 AGGREGATE_COLUMNS = _build_feature_columns("aggregate", SEQUENCE_LENGTH)
-ACTIVE_COLUMNS = _build_feature_columns("active_count", SEQUENCE_LENGTH)
-BURST_COLUMNS = _build_feature_columns("burst_count", SEQUENCE_LENGTH)
+SLOT_SIN_COLUMNS = _build_feature_columns("slot_sin", SEQUENCE_LENGTH)
+SLOT_COS_COLUMNS = _build_feature_columns("slot_cos", SEQUENCE_LENGTH)
+WEEKDAY_SIN_COLUMNS = _build_feature_columns("weekday_sin", SEQUENCE_LENGTH)
+WEEKDAY_COS_COLUMNS = _build_feature_columns("weekday_cos", SEQUENCE_LENGTH)
+FEATURE_COLUMN_MAP = {
+    "aggregate": AGGREGATE_COLUMNS,
+    "slot_sin": SLOT_SIN_COLUMNS,
+    "slot_cos": SLOT_COS_COLUMNS,
+    "weekday_sin": WEEKDAY_SIN_COLUMNS,
+    "weekday_cos": WEEKDAY_COS_COLUMNS,
+}
+ALL_FEATURE_COLUMNS = tuple(
+    column
+    for feature_name in FEATURE_NAMES
+    for column in FEATURE_COLUMN_MAP[feature_name]
+)
 
 
 @dataclass(slots=True)
@@ -78,9 +92,7 @@ def load_classification_samples(data_path: Path) -> list[ClassificationSample]:
         "house_id",
         "date",
         "label_name",
-        *AGGREGATE_COLUMNS,
-        *ACTIVE_COLUMNS,
-        *BURST_COLUMNS,
+        *ALL_FEATURE_COLUMNS,
     }
     missing_columns = required_columns.difference(data_frame.columns)
     if missing_columns:
@@ -92,14 +104,11 @@ def load_classification_samples(data_path: Path) -> list[ClassificationSample]:
         if label_name not in LABEL_TO_INDEX:
             raise ValueError(f"未知分类标签: {label_name}")
 
-        aggregate_values = np.asarray([getattr(row, column) for column in AGGREGATE_COLUMNS], dtype=np.float32)
-        active_values = np.asarray([getattr(row, column) for column in ACTIVE_COLUMNS], dtype=np.float32)
-        burst_values = np.asarray([getattr(row, column) for column in BURST_COLUMNS], dtype=np.float32)
-
-        features = np.stack(
-            [aggregate_values, active_values, burst_values],
-            axis=-1,
-        )
+        feature_arrays = [
+            np.asarray([getattr(row, column) for column in FEATURE_COLUMN_MAP[feature_name]], dtype=np.float32)
+            for feature_name in FEATURE_NAMES
+        ]
+        features = np.stack(feature_arrays, axis=-1)
         if features.shape != (SEQUENCE_LENGTH, INPUT_CHANNELS):
             raise ValueError(f"样本形状不正确: {features.shape}")
 

@@ -9,6 +9,7 @@ import yaml
 
 from common.config_validation import validate_config_schema
 from common.device import detect_device
+from classification.TCN.constants import INPUT_CHANNELS
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "config.yaml"
@@ -139,7 +140,7 @@ def load_experiment_config(config_path: Path = DEFAULT_CONFIG_PATH) -> Experimen
         val_ratio=float(data_raw.get("val_ratio", 0.15)),
     )
     model_config = ModelConfig(
-        input_channels=int(model_raw.get("input_channels", 3)),
+        input_channels=int(model_raw.get("input_channels", INPUT_CHANNELS)),
         num_classes=int(model_raw.get("num_classes", 4)),
         channel_sizes=[int(value) for value in model_raw.get("channel_sizes", [32, 64, 128])],
         kernel_size=int(model_raw.get("kernel_size", 3)),
@@ -176,6 +177,8 @@ def load_experiment_config(config_path: Path = DEFAULT_CONFIG_PATH) -> Experimen
 
     if data_config.train_ratio + data_config.val_ratio >= 1:
         raise ValueError("配置错误：train_ratio + val_ratio 必须小于 1")
+    if model_config.input_channels != INPUT_CHANNELS:
+        raise ValueError(f"配置错误：model.input_channels 必须固定为 {INPUT_CHANNELS}")
     return ExperimentConfig(
         data=data_config,
         model=model_config,

@@ -76,7 +76,7 @@ class TemporalBlock(nn.Module):
 
 
 class TCNClassifier(nn.Module):
-    """面向 96x3 日级样本的 TCN 四分类器。"""
+    """面向 96x5 日级样本的 TCN 四分类器。"""
 
     def __init__(
         self,

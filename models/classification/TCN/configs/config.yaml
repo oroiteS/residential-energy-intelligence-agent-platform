@@ -9,8 +9,8 @@ data:
 
 # 模型结构配置
 model:
-  # 输入通道数，当前固定为 aggregate / active_appliance_count / burst_event_count
-  input_channels: 3
+  # 输入通道数，当前固定为 aggregate / slot_sin / slot_cos / weekday_sin / weekday_cos
+  input_channels: 5
   # 分类类别数，当前固定为 4 类
   num_classes: 4
   # TCN 每一层的卷积通道数，层数由列表长度决定
