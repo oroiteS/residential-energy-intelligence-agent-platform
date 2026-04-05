@@ -40,7 +40,7 @@ train:
   # 训练输出目录，保存 best_model.pt、training_summary.json 和 result.png
   output_dir: "forecast/LSTM/output"
   # 每个 batch 的样本数
-  batch_size: 512
+  batch_size: 1024
   # 训练轮数
   epochs: 500
   # Adam 优化器学习率
@@ -52,7 +52,7 @@ train:
   # 随机种子，保证可复现
   seed: 42
   # Early stopping 容忍轮数；连续这么多轮验证集 RMSE 无明显下降就提前停止
-  early_stopping_patience: 25
+  early_stopping_patience: 50
   # Early stopping 的最小改进阈值
   early_stopping_min_delta: 0.0001
   # 损失函数，支持 mse / huber
@@ -67,7 +67,7 @@ test:
   # 测试输出目录，保存 test_summary.json
   output_dir: "forecast/LSTM/output"
   # 测试时的 batch 大小
-  batch_size: 512
+  batch_size: 1024
 
 # 推理配置
 predict:
@@ -76,4 +76,4 @@ predict:
   # 推理输出目录，保存 prediction.csv 或 prediction.json
   output_dir: "forecast/LSTM/output"
   # 批量推理时的 batch 大小
-  batch_size: 512
+  batch_size: 1024
