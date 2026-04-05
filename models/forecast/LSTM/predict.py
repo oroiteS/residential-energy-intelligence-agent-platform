@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
+from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -252,10 +253,15 @@ def _predict_values(
     experiment_config,
     batch_size: int,
 ) -> np.ndarray:
+    log = tqdm.write
     device_name = detect_device()
     device = torch.device(device_name)
     checkpoint = load_checkpoint(checkpoint_path, device)
     normalization = checkpoint_to_normalization(checkpoint)
+    log(
+        f"[推理] checkpoint={checkpoint_path} "
+        f"samples={len(features)} batch_size={batch_size} device={device_name}"
+    )
 
     dataset = PredictionDataset(
         features=features,
@@ -275,14 +281,25 @@ def _predict_values(
     prediction_batches: list[np.ndarray] = []
     denorm_means: list[np.ndarray] = []
     denorm_stds: list[np.ndarray] = []
+    completed_samples = 0
     with torch.no_grad():
-        for feature_batch, index_batch in data_loader:
+        progress = tqdm(
+            data_loader,
+            total=len(data_loader),
+            desc="批量推理",
+            leave=False,
+            dynamic_ncols=True,
+            mininterval=1.0,
+        )
+        for feature_batch, index_batch in progress:
             feature_batch = feature_batch.to(device)
             outputs = model(feature_batch, teacher_forcing_ratio=0.0)
             prediction_batches.append(outputs.cpu().numpy())
             batch_indices = index_batch.cpu().numpy()
             denorm_means.append(dataset.denorm_mean[batch_indices])
             denorm_stds.append(dataset.denorm_std[batch_indices])
+            completed_samples += len(batch_indices)
+            progress.set_postfix(done=completed_samples)
 
     predictions = np.concatenate(prediction_batches, axis=0)
     denorm_mean = np.concatenate(denorm_means, axis=0)
@@ -399,9 +416,11 @@ def main(
     config_path: Path = DEFAULT_CONFIG_PATH,
     output_path: Path | None = None,
 ) -> None:
+    log = tqdm.write
+    log(f"[推理] 读取输入: {input_path}")
     result_path = run_prediction(
         input_path=input_path,
         config_path=config_path,
         output_path=output_path,
     )
-    print(f"推理完成，结果已写入: {result_path}")
+    log(f"推理完成，结果已写入: {result_path}")

@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from forecast.LSTM.config import DataConfig, ExperimentConfig, ModelConfig, TrainConfig
 from forecast.LSTM.dataset import (
@@ -153,26 +154,41 @@ def evaluate(
     data_loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    stage_label: str = "验证",
+    log_interval: int | None = None,
 ) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
+    total_samples = 0
     predictions: list[np.ndarray] = []
     targets: list[np.ndarray] = []
     denorm_means: list[np.ndarray] = []
     denorm_stds: list[np.ndarray] = []
+    total_batches = len(data_loader)
 
     with torch.no_grad():
-        for features, labels, batch_denorm_mean, batch_denorm_std in data_loader:
+        progress = tqdm(
+            data_loader,
+            total=total_batches,
+            desc=stage_label,
+            leave=False,
+            dynamic_ncols=True,
+            mininterval=1.0,
+        )
+        for features, labels, batch_denorm_mean, batch_denorm_std in progress:
             features = features.to(device)
             labels = labels.to(device)
 
             outputs = model(features, teacher_forcing_ratio=0.0)
             loss = criterion(outputs, labels)
             total_loss += float(loss.item()) * len(labels)
+            total_samples += len(labels)
             predictions.append(outputs.cpu().numpy())
             targets.append(labels.cpu().numpy())
             denorm_means.append(batch_denorm_mean.cpu().numpy())
             denorm_stds.append(batch_denorm_std.cpu().numpy())
+            average_loss = total_loss / max(1, total_samples)
+            progress.set_postfix(avg_loss=f"{average_loss:.4f}")
 
     y_pred = np.concatenate(predictions, axis=0)
     y_true = np.concatenate(targets, axis=0)
@@ -193,15 +209,27 @@ def train_one_epoch(
     device: torch.device,
     teacher_forcing_ratio: float,
     gradient_clip_norm: float | None = None,
+    stage_label: str = "训练",
+    log_interval: int | None = None,
 ) -> dict[str, float]:
     model.train()
     total_loss = 0.0
+    total_samples = 0
     predictions: list[np.ndarray] = []
     targets: list[np.ndarray] = []
     denorm_means: list[np.ndarray] = []
     denorm_stds: list[np.ndarray] = []
+    total_batches = len(data_loader)
+    progress = tqdm(
+        data_loader,
+        total=total_batches,
+        desc=stage_label,
+        leave=False,
+        dynamic_ncols=True,
+        mininterval=1.0,
+    )
 
-    for features, labels, batch_denorm_mean, batch_denorm_std in data_loader:
+    for features, labels, batch_denorm_mean, batch_denorm_std in progress:
         features = features.to(device)
         labels = labels.to(device)
 
@@ -221,10 +249,13 @@ def train_one_epoch(
         optimizer.step()
 
         total_loss += float(loss.item()) * len(labels)
+        total_samples += len(labels)
         predictions.append(outputs.detach().cpu().numpy())
         targets.append(labels.cpu().numpy())
         denorm_means.append(batch_denorm_mean.cpu().numpy())
         denorm_stds.append(batch_denorm_std.cpu().numpy())
+        average_loss = total_loss / max(1, total_samples)
+        progress.set_postfix(avg_loss=f"{average_loss:.4f}")
 
     y_pred = np.concatenate(predictions, axis=0)
     y_true = np.concatenate(targets, axis=0)
