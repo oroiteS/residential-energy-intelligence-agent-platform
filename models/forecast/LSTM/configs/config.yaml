@@ -8,9 +8,13 @@ data:
   train_ratio: 0.7
   # 验证集占比，测试集占比 = 1 - train_ratio - val_ratio
   val_ratio: 0.15
-  # 预测输入特征，默认先使用单通道 aggregate baseline
+  # 预测输入特征，默认与 Transformer 保持一致，使用多字段输入
   feature_names:
     - "aggregate"
+    - "slot_sin"
+    - "slot_cos"
+    - "weekday_sin"
+    - "weekday_cos"
   # aggregate 默认用输入窗口自身统计量做样本级归一化，更适合跨家庭泛化
   aggregate_normalization: "input_window"
   # 归一化安全下界，避免标准差过小导致数值不稳定
@@ -19,7 +23,7 @@ data:
 # 模型结构配置
 model:
   # 输入特征维度，必须与 data.feature_names 长度一致
-  input_size: 1
+  input_size: 5
   # LSTM 隐状态维度
   hidden_size: 256
   # LSTM 堆叠层数
