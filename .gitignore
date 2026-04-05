@@ -60,8 +60,8 @@ AGENTS.md
 mysql_data/
 backend/outputs/
 backend/uploads/
-models/classification/TCN/output/
-models/forecast/LSTM/output/
+!models/classification/TCN/output/
+!models/forecast/LSTM/output/
 !models/forecast/transformer/output/
 models_agent/checkpoints/
 
