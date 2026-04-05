@@ -1,0 +1,57 @@
+{
+  "checkpoint_path": "/home/oroite/my/projects/gp/models/classification/TCN/output/best_model.pt",
+  "metrics": {
+    "loss": 0.23115639058339077,
+    "accuracy": 0.9030079803560467,
+    "macro_f1": 0.892514779461221,
+    "elapsed_seconds": 0.16271615028381348
+  },
+  "config": {
+    "data": {
+      "data_path": "/home/oroite/my/projects/gp/models/data/processed/classification/classification_day_labels.csv",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15
+    },
+    "model": {
+      "input_channels": 3,
+      "num_classes": 4,
+      "channel_sizes": [
+        64,
+        128,
+        256
+      ],
+      "kernel_size": 3,
+      "dropout": 0.2
+    },
+    "train": {
+      "output_dir": "/home/oroite/my/projects/gp/models/classification/TCN/output",
+      "batch_size": 128,
+      "epochs": 200,
+      "optimizer": "adam",
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "seed": 42,
+      "scheduler": "none",
+      "label_smoothing": 0.0,
+      "scheduler_t0": 10,
+      "scheduler_t_mult": 2,
+      "scheduler_eta_min": 1e-06,
+      "early_stopping_patience": 25,
+      "early_stopping_min_delta": 0.0003
+    },
+    "test": {
+      "checkpoint_path": null,
+      "output_dir": "/home/oroite/my/projects/gp/models/classification/TCN/output",
+      "batch_size": 128
+    },
+    "predict": {
+      "checkpoint_path": null,
+      "output_dir": "/home/oroite/my/projects/gp/models/classification/TCN/output",
+      "batch_size": 128
+    }
+  },
+  "runtime": {
+    "device": "cuda",
+    "loss": "CrossEntropyLoss"
+  }
+}
