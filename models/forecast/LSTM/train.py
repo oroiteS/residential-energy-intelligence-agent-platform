@@ -13,6 +13,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
+from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -136,28 +137,53 @@ def run_training(experiment_config) -> dict[str, object]:
     train_config = experiment_config.train
     model_config = experiment_config.model
     set_seed(train_config.seed)
+    log = tqdm.write
 
     device_name = detect_device()
     device = torch.device(device_name)
 
+    log("[阶段] 开始准备 LSTM 训练")
+    log(
+        f"[配置] data_path={experiment_config.data.data_path} "
+        f"split_mode={experiment_config.data.split_mode} "
+        f"batch_size={train_config.batch_size} "
+        f"device={device_name}"
+    )
+
+    log("[阶段] 加载并切分预测样本")
     train_dataset, val_dataset, test_dataset = create_split_datasets(
         data_config=experiment_config.data,
         seed=train_config.seed,
     )
+    log(
+        f"[数据] train={len(train_dataset)} val={len(val_dataset)} test={len(test_dataset)}"
+    )
+
+    log("[阶段] 构建 DataLoader")
     train_loader, val_loader, test_loader = create_data_loaders(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
         test_dataset=test_dataset,
         batch_size=train_config.batch_size,
     )
+    log(
+        f"[DataLoader] train_batches={len(train_loader)} "
+        f"val_batches={len(val_loader)} test_batches={len(test_loader)}"
+    )
 
+    log("[阶段] 初始化模型、损失函数与优化器")
     model = build_model(model_config).to(device)
+    parameter_count = count_parameters(model)
     criterion = build_criterion(train_config)
     loss_name = describe_loss(train_config)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=train_config.learning_rate,
         weight_decay=train_config.weight_decay,
+    )
+    log(
+        f"[模型] parameter_count={parameter_count} loss={loss_name} "
+        f"learning_rate={train_config.learning_rate}"
     )
 
     best_val_rmse = float("inf")
@@ -169,7 +195,13 @@ def run_training(experiment_config) -> dict[str, object]:
     stop_epoch: int | None = None
     start_time = time.time()
 
-    for epoch in range(1, train_config.epochs + 1):
+    epoch_progress = tqdm(
+        range(1, train_config.epochs + 1),
+        desc="训练 Epoch",
+        dynamic_ncols=True,
+        mininterval=1.0,
+    )
+    for epoch in epoch_progress:
         train_metrics = train_one_epoch(
             model=model,
             data_loader=train_loader,
@@ -178,12 +210,14 @@ def run_training(experiment_config) -> dict[str, object]:
             device=device,
             teacher_forcing_ratio=model_config.teacher_forcing_ratio,
             gradient_clip_norm=train_config.gradient_clip_norm,
+            stage_label=f"Epoch {epoch}/{train_config.epochs} 训练",
         )
         val_metrics = evaluate(
             model=model,
             data_loader=val_loader,
             criterion=criterion,
             device=device,
+            stage_label=f"Epoch {epoch}/{train_config.epochs} 验证",
         )
 
         epoch_record = {
@@ -201,7 +235,11 @@ def run_training(experiment_config) -> dict[str, object]:
         }
         history.append(epoch_record)
 
-        print(
+        epoch_progress.set_postfix(
+            val_rmse=f"{val_metrics['rmse']:.2f}",
+            best_rmse=f"{min(best_val_rmse, val_metrics['rmse']):.2f}",
+        )
+        log(
             f"epoch={epoch:02d} "
             f"train_loss={train_metrics['loss']:.4f} "
             f"train_mae={train_metrics['mae']:.4f} "
@@ -236,7 +274,7 @@ def run_training(experiment_config) -> dict[str, object]:
         if epochs_without_improvement >= train_config.early_stopping_patience:
             stopped_early = True
             stop_epoch = epoch
-            print(
+            log(
                 "触发 early stopping，"
                 f"epoch={epoch} "
                 f"patience={train_config.early_stopping_patience} "
@@ -248,11 +286,13 @@ def run_training(experiment_config) -> dict[str, object]:
         raise RuntimeError("训练未产生有效模型参数")
 
     model.load_state_dict(best_state_dict)
+    log("[阶段] 使用最佳权重进行测试评估")
     test_metrics = evaluate(
         model=model,
         data_loader=test_loader,
         criterion=criterion,
         device=device,
+        stage_label="测试",
     )
     best_metrics.update(
         {
@@ -282,7 +322,7 @@ def run_training(experiment_config) -> dict[str, object]:
         experiment_config=experiment_config,
         best_metrics=best_metrics,
         device_name=device_name,
-        parameter_count=count_parameters(model),
+        parameter_count=parameter_count,
     )
 
     save_json_summary(
@@ -294,7 +334,7 @@ def run_training(experiment_config) -> dict[str, object]:
             "runtime": {
                 "device": device_name,
                 "loss": loss_name,
-                "parameter_count": count_parameters(model),
+                "parameter_count": parameter_count,
                 "aggregate_normalization": experiment_config.data.aggregate_normalization,
             },
             "early_stopping": {
@@ -311,7 +351,7 @@ def run_training(experiment_config) -> dict[str, object]:
         },
     )
 
-    print(
+    log(
         "训练完成，"
         f"best_epoch={best_metrics['best_epoch']} "
         f"val_rmse={best_metrics['val_rmse']:.4f} "

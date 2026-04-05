@@ -7,6 +7,7 @@ import sys
 import time
 
 import torch
+from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -29,6 +30,7 @@ from forecast.transformer.engine import (
 def run_test(experiment_config) -> dict[str, object]:
     test_config = experiment_config.test
     train_config = experiment_config.train
+    log = tqdm.write
 
     set_seed(train_config.seed)
 
@@ -39,6 +41,10 @@ def run_test(experiment_config) -> dict[str, object]:
     )
     checkpoint = load_checkpoint(checkpoint_path, device)
     normalization = checkpoint_to_normalization(checkpoint)
+    log(
+        f"[测试] checkpoint={checkpoint_path} "
+        f"batch_size={test_config.batch_size} device={device_name}"
+    )
 
     _, _, test_dataset = create_split_datasets(
         data_config=experiment_config.data,
@@ -46,6 +52,7 @@ def run_test(experiment_config) -> dict[str, object]:
         normalization=normalization,
     )
     test_loader = create_eval_loader(test_dataset, batch_size=test_config.batch_size)
+    log(f"[测试] samples={len(test_dataset)} batches={len(test_loader)}")
 
     model = build_model(experiment_config.model).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -68,7 +75,7 @@ def run_test(experiment_config) -> dict[str, object]:
     }
     save_json_summary(test_config.output_dir / "test_summary.json", summary)
 
-    print(
+    log(
         "测试完成，"
         f"test_loss={metrics['loss']:.4f} "
         f"test_mae={metrics['mae']:.4f} "
