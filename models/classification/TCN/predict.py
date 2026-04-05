@@ -16,12 +16,15 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from classification.TCN.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
-from classification.TCN.constants import LABELS, SEQUENCE_LENGTH
+from classification.TCN.constants import FEATURE_NAMES, LABELS, SEQUENCE_LENGTH
 from classification.TCN.dataset import (
-    ACTIVE_COLUMNS,
     AGGREGATE_COLUMNS,
-    BURST_COLUMNS,
     INDEX_TO_LABEL,
+    FEATURE_COLUMN_MAP,
+    SLOT_COS_COLUMNS,
+    SLOT_SIN_COLUMNS,
+    WEEKDAY_COS_COLUMNS,
+    WEEKDAY_SIN_COLUMNS,
 )
 from classification.TCN.engine import (
     build_model,
@@ -46,27 +49,60 @@ class PredictionDataset(Dataset[tuple[torch.Tensor, int]]):
         return torch.from_numpy(self.features[index]), index
 
 
-def _single_feature_record_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    aggregate = payload.get("aggregate")
-    active = payload.get("active_appliance_count")
-    burst = payload.get("burst_event_count")
+def _build_temporal_feature_sequences(date_value: str) -> dict[str, list[float]]:
+    base_date = pd.to_datetime(date_value)
+    if pd.isna(base_date):
+        raise ValueError("无法根据 date 自动生成时间特征，请提供合法的 date 字段")
 
-    if aggregate is None or active is None or burst is None:
-        raise ValueError("单样本 json 需要包含 aggregate / active_appliance_count / burst_event_count")
-    if not (len(aggregate) == len(active) == len(burst) == SEQUENCE_LENGTH):
-        raise ValueError("单样本三条序列长度都必须为 96")
+    timestamps = pd.date_range(
+        start=base_date.normalize(),
+        periods=SEQUENCE_LENGTH,
+        freq="15min",
+    )
+    slot_index = timestamps.hour * 4 + timestamps.minute // 15
+    weekday_index = timestamps.dayofweek
+    slot_angle = 2.0 * np.pi * slot_index.to_numpy(dtype=np.float32) / 96.0
+    weekday_angle = 2.0 * np.pi * weekday_index.to_numpy(dtype=np.float32) / 7.0
+    return {
+        "slot_sin": np.sin(slot_angle).astype(np.float32).tolist(),
+        "slot_cos": np.cos(slot_angle).astype(np.float32).tolist(),
+        "weekday_sin": np.sin(weekday_angle).astype(np.float32).tolist(),
+        "weekday_cos": np.cos(weekday_angle).astype(np.float32).tolist(),
+    }
+
+
+def _single_feature_record_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    feature_values = {
+        feature_name: payload.get(feature_name)
+        for feature_name in FEATURE_NAMES
+    }
+    if feature_values["aggregate"] is None:
+        raise ValueError("单样本 json 至少需要包含 aggregate")
+
+    missing_temporal_features = [
+        feature_name
+        for feature_name in FEATURE_NAMES
+        if feature_name != "aggregate" and feature_values[feature_name] is None
+    ]
+    if missing_temporal_features:
+        temporal_sequences = _build_temporal_feature_sequences(str(payload.get("date", "")))
+        for feature_name in missing_temporal_features:
+            feature_values[feature_name] = temporal_sequences[feature_name]
+
+    for feature_name, values in feature_values.items():
+        if values is None or len(values) != SEQUENCE_LENGTH:
+            raise ValueError(f"{feature_name} 输入序列长度必须为 96")
 
     record: dict[str, Any] = {
         "sample_id": payload.get("sample_id", "single_sample"),
         "house_id": payload.get("house_id", ""),
         "date": payload.get("date", ""),
     }
-    for index, value in enumerate(aggregate):
-        record[AGGREGATE_COLUMNS[index]] = float(value)
-    for index, value in enumerate(active):
-        record[ACTIVE_COLUMNS[index]] = float(value)
-    for index, value in enumerate(burst):
-        record[BURST_COLUMNS[index]] = float(value)
+    for feature_name, values in feature_values.items():
+        if values is None:
+            continue
+        for index, value in enumerate(values):
+            record[FEATURE_COLUMN_MAP[feature_name][index]] = float(value)
     return record
 
 
@@ -86,7 +122,16 @@ def _load_input_records(input_path: Path) -> pd.DataFrame:
     else:
         raise ValueError(f"暂不支持的输入格式: {input_path.suffix}")
 
-    required_columns = {"sample_id", "house_id", "date", *AGGREGATE_COLUMNS, *ACTIVE_COLUMNS, *BURST_COLUMNS}
+    required_columns = {
+        "sample_id",
+        "house_id",
+        "date",
+        *AGGREGATE_COLUMNS,
+        *SLOT_SIN_COLUMNS,
+        *SLOT_COS_COLUMNS,
+        *WEEKDAY_SIN_COLUMNS,
+        *WEEKDAY_COS_COLUMNS,
+    }
     missing_columns = required_columns.difference(data_frame.columns)
     if missing_columns:
         raise ValueError(f"推理输入缺少必要字段: {sorted(missing_columns)}")
@@ -95,9 +140,14 @@ def _load_input_records(input_path: Path) -> pd.DataFrame:
 
 def _extract_features_and_metadata(data_frame: pd.DataFrame) -> tuple[np.ndarray, pd.DataFrame]:
     aggregate = data_frame[AGGREGATE_COLUMNS].to_numpy(dtype=np.float32)
-    active = data_frame[ACTIVE_COLUMNS].to_numpy(dtype=np.float32)
-    burst = data_frame[BURST_COLUMNS].to_numpy(dtype=np.float32)
-    features = np.stack([aggregate, active, burst], axis=-1)
+    slot_sin = data_frame[SLOT_SIN_COLUMNS].to_numpy(dtype=np.float32)
+    slot_cos = data_frame[SLOT_COS_COLUMNS].to_numpy(dtype=np.float32)
+    weekday_sin = data_frame[WEEKDAY_SIN_COLUMNS].to_numpy(dtype=np.float32)
+    weekday_cos = data_frame[WEEKDAY_COS_COLUMNS].to_numpy(dtype=np.float32)
+    features = np.stack(
+        [aggregate, slot_sin, slot_cos, weekday_sin, weekday_cos],
+        axis=-1,
+    )
     metadata = data_frame[[column for column in ["sample_id", "house_id", "date"] if column in data_frame.columns]].copy()
     if "label_name" in data_frame.columns:
         metadata["label_name"] = data_frame["label_name"]

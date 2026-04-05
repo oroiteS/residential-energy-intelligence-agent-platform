@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from data.process.common.base import list_base_files, load_base_file, select_complete_days
@@ -14,8 +15,14 @@ from data.process.common.progress import ProgressBar, log_stage
 def _build_daily_feature_record(house_id: str, day: pd.Timestamp, day_df: pd.DataFrame) -> dict[str, object]:
     sorted_df = day_df.sort_values("slot_index")
     aggregate_values = sorted_df["aggregate"].to_numpy(dtype=float)
-    active_values = sorted_df["active_appliance_count"].to_numpy(dtype=int)
-    burst_values = sorted_df["burst_event_count"].to_numpy(dtype=int)
+    slot_index = sorted_df["slot_index"].to_numpy(dtype=np.float32)
+    weekday_index = sorted_df["timestamp"].dt.dayofweek.to_numpy(dtype=np.float32)
+    slot_angle = 2.0 * np.pi * slot_index / 96.0
+    weekday_angle = 2.0 * np.pi * weekday_index / 7.0
+    slot_sin_values = np.sin(slot_angle).astype(float)
+    slot_cos_values = np.cos(slot_angle).astype(float)
+    weekday_sin_values = np.sin(weekday_angle).astype(float)
+    weekday_cos_values = np.cos(weekday_angle).astype(float)
 
     record: dict[str, object] = {
         "sample_id": f"{house_id}_{day.isoformat()}",
@@ -25,10 +32,14 @@ def _build_daily_feature_record(house_id: str, day: pd.Timestamp, day_df: pd.Dat
 
     for index, value in enumerate(aggregate_values):
         record[f"aggregate_{index:03d}"] = float(value)
-    for index, value in enumerate(active_values):
-        record[f"active_count_{index:03d}"] = int(value)
-    for index, value in enumerate(burst_values):
-        record[f"burst_count_{index:03d}"] = int(value)
+    for index, value in enumerate(slot_sin_values):
+        record[f"slot_sin_{index:03d}"] = float(value)
+    for index, value in enumerate(slot_cos_values):
+        record[f"slot_cos_{index:03d}"] = float(value)
+    for index, value in enumerate(weekday_sin_values):
+        record[f"weekday_sin_{index:03d}"] = float(value)
+    for index, value in enumerate(weekday_cos_values):
+        record[f"weekday_cos_{index:03d}"] = float(value)
     return record
 
 

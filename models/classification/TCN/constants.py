@@ -10,4 +10,11 @@ LABELS = [
 ]
 
 SEQUENCE_LENGTH = 96
-INPUT_CHANNELS = 3
+FEATURE_NAMES = (
+    "aggregate",
+    "slot_sin",
+    "slot_cos",
+    "weekday_sin",
+    "weekday_cos",
+)
+INPUT_CHANNELS = len(FEATURE_NAMES)

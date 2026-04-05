@@ -199,8 +199,8 @@
 
 模型：TCN 分类器
 
-- 输入：单天样本，形状为 `96 x 3`
-- 三个通道固定为：`Aggregate`、`active_appliance_count`、`burst_event_count`
+- 输入：单天样本，形状为 `96 x 5`
+- 五个通道固定为：`Aggregate`、`slot_sin`、`slot_cos`、`weekday_sin`、`weekday_cos`
 - 输出：类别概率（softmax）+ 预测标签
 
 训练策略：
@@ -434,7 +434,7 @@
 
 ### 8.3 深度学习对比（升级亮点，建议做）
 
-- TCN 分类器：单天 `96 x 3` 时序输入 -> 分类输出
+- TCN 分类器：单天 `96 x 5` 时序输入 -> 分类输出
 
 评估要求：
 
