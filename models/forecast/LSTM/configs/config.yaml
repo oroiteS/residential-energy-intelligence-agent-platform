@@ -42,7 +42,7 @@ train:
   # 每个 batch 的样本数
   batch_size: 512
   # 训练轮数
-  epochs: 200
+  epochs: 500
   # Adam 优化器学习率
   learning_rate: 0.0002
   # Adam 优化器权重衰减系数
@@ -52,7 +52,7 @@ train:
   # 随机种子，保证可复现
   seed: 42
   # Early stopping 容忍轮数；连续这么多轮验证集 RMSE 无明显下降就提前停止
-  early_stopping_patience: 50
+  early_stopping_patience: 25
   # Early stopping 的最小改进阈值
   early_stopping_min_delta: 0.0001
   # 损失函数，支持 mse / huber
@@ -76,4 +76,4 @@ predict:
   # 推理输出目录，保存 prediction.csv 或 prediction.json
   output_dir: "forecast/LSTM/output"
   # 批量推理时的 batch 大小
-  batch_size: 128
+  batch_size: 512
