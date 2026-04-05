@@ -1,19 +1,19 @@
 {
-  "checkpoint_path": "/home/oroite/my/projects/gp/models/classification/TCN/output/best_model.pt",
+  "checkpoint_path": "/root/gp/models/classification/TCN/output/best_model.pt",
   "metrics": {
-    "loss": 0.23115639058339077,
-    "accuracy": 0.9030079803560467,
-    "macro_f1": 0.892514779461221,
-    "elapsed_seconds": 0.16271615028381348
+    "loss": 0.026156568272306294,
+    "accuracy": 0.9912187982762827,
+    "macro_f1": 0.9909362841323677,
+    "elapsed_seconds": 1.4588992595672607
   },
   "config": {
     "data": {
-      "data_path": "/home/oroite/my/projects/gp/models/data/processed/classification/classification_day_labels.csv",
+      "data_path": "/root/gp/models/data/processed/classification/classification_day_labels.csv",
       "train_ratio": 0.7,
       "val_ratio": 0.15
     },
     "model": {
-      "input_channels": 3,
+      "input_channels": 5,
       "num_classes": 4,
       "channel_sizes": [
         64,
@@ -24,7 +24,7 @@
       "dropout": 0.2
     },
     "train": {
-      "output_dir": "/home/oroite/my/projects/gp/models/classification/TCN/output",
+      "output_dir": "/root/gp/models/classification/TCN/output",
       "batch_size": 128,
       "epochs": 200,
       "optimizer": "adam",
@@ -41,12 +41,12 @@
     },
     "test": {
       "checkpoint_path": null,
-      "output_dir": "/home/oroite/my/projects/gp/models/classification/TCN/output",
+      "output_dir": "/root/gp/models/classification/TCN/output",
       "batch_size": 128
     },
     "predict": {
       "checkpoint_path": null,
-      "output_dir": "/home/oroite/my/projects/gp/models/classification/TCN/output",
+      "output_dir": "/root/gp/models/classification/TCN/output",
       "batch_size": 128
     }
   },

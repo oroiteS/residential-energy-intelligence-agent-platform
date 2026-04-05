@@ -1,0 +1,64 @@
+{
+  "checkpoint_path": "/root/gp/models/forecast/LSTM/output/best_model.pt",
+  "metrics": {
+    "mae": 277.9256591796875,
+    "rmse": 540.5628662109375,
+    "smape": 54.16515350341797,
+    "wape": 26.933692932128906,
+    "loss": 0.39832790490309633,
+    "elapsed_seconds": 3.5057570934295654
+  },
+  "config": {
+    "data": {
+      "data_path": "/root/gp/models/data/processed/forecast/forecast_samples.csv",
+      "split_mode": "by_house",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "feature_names": [
+        "aggregate",
+        "slot_sin",
+        "slot_cos",
+        "weekday_sin",
+        "weekday_cos"
+      ],
+      "aggregate_normalization": "input_window",
+      "aggregate_norm_eps": 1e-06
+    },
+    "model": {
+      "input_size": 5,
+      "hidden_size": 256,
+      "num_layers": 3,
+      "dropout": 0.2,
+      "target_length": 96,
+      "teacher_forcing_ratio": 0.5
+    },
+    "train": {
+      "output_dir": "/root/gp/models/forecast/LSTM/output",
+      "batch_size": 1024,
+      "epochs": 500,
+      "learning_rate": 0.0002,
+      "weight_decay": 0.0001,
+      "gradient_clip_norm": 1.0,
+      "seed": 42,
+      "early_stopping_patience": 50,
+      "early_stopping_min_delta": 0.0001,
+      "loss_name": "huber",
+      "huber_delta": 1.0
+    },
+    "test": {
+      "checkpoint_path": null,
+      "output_dir": "/root/gp/models/forecast/LSTM/output",
+      "batch_size": 1024
+    },
+    "predict": {
+      "checkpoint_path": null,
+      "output_dir": "/root/gp/models/forecast/LSTM/output",
+      "batch_size": 1024
+    }
+  },
+  "runtime": {
+    "device": "cuda",
+    "loss": "HuberLoss(delta=1.0)",
+    "aggregate_normalization": "input_window"
+  }
+}
