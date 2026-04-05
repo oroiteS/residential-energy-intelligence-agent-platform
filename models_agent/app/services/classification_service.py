@@ -7,7 +7,7 @@ from typing import Any
 from app.config import Settings
 from app.contracts import PredictRequest
 from app.errors import ServiceUnavailableError, ValidationError
-from app.inference.classification import LABELS, SEQUENCE_LENGTH, predict_single_sample
+from app.inference.classification import FEATURE_NAMES, LABELS, SEQUENCE_LENGTH, predict_single_sample
 
 
 class ClassificationService:
@@ -28,9 +28,9 @@ class ClassificationService:
     def model_info(self) -> dict[str, Any]:
         return {
             "service_version": "v1",
-            "supported_models": ["tcn", "lstm"],
-            "reserved_models": ["transformer"],
+            "supported_models": ["tcn", "lstm", "transformer"],
             "classification": {
+                "supported_models": ["tcn"],
                 "labels": LABELS,
                 "label_definitions": [
                     {"key": "day_high_night_low", "display_name": "白天高晚上低型"},
@@ -48,14 +48,12 @@ class ClassificationService:
                         "configurable": True,
                     },
                     "min_history_length": SEQUENCE_LENGTH,
-                    "feature_names": [
-                        "aggregate",
-                        "active_appliance_count",
-                        "burst_event_count",
-                    ],
+                    "feature_names": list(FEATURE_NAMES),
+                    "temporal_features_from_timestamp": True,
                 },
             },
             "forecasting": {
+                "supported_models": ["lstm", "transformer"],
                 "request_mode": "time_range",
                 "supported_granularities": ["15min"],
                 "summary_schema": "ForecastSummary",
@@ -73,9 +71,12 @@ class ClassificationService:
                     "target_length": 96,
                     "feature_names": [
                         "aggregate",
-                        "active_appliance_count",
-                        "burst_event_count",
+                        "slot_sin",
+                        "slot_cos",
+                        "weekday_sin",
+                        "weekday_cos",
                     ],
+                    "temporal_features_from_timestamp": True,
                 },
             },
         }
@@ -89,9 +90,12 @@ class ClassificationService:
 
         try:
             result = predict_single_sample(
-                aggregate=[point.aggregate for point in request.series],
-                active_appliance_count=[point.active_appliance_count for point in request.series],
-                burst_event_count=[point.burst_event_count for point in request.series],
+                sample={
+                    "sample_id": f"{request.dataset_id}_{request.window.start[:10]}",
+                    "house_id": str(request.dataset_id),
+                    "date": request.window.start[:10],
+                    "aggregate": [point.aggregate for point in request.series],
+                },
                 config_path=self.settings.classification_config_path,
             )
         except FileNotFoundError as exc:

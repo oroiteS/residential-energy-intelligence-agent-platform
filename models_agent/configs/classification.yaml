@@ -1,18 +1,26 @@
 # 分类模型本地推理配置
 
+data:
+  feature_names:
+    - "aggregate"
+    - "slot_sin"
+    - "slot_cos"
+    - "weekday_sin"
+    - "weekday_cos"
+
 model:
-  input_channels: 3
+  input_channels: 5
   num_classes: 4
   channel_sizes:
+    - 32
     - 64
     - 128
-    - 256
   kernel_size: 3
   dropout: 0.2
 
 train:
-  output_dir: "checkpoints/classification"
+  output_dir: "../models/classification/TCN/output"
 
 predict:
-  checkpoint_path: "checkpoints/classification/best_model.pt"
+  checkpoint_path: "../models/classification/TCN/output/best_model.pt"
   batch_size: 128

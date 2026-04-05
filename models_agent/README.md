@@ -3,7 +3,7 @@
 基于 `Robyn` 的 Python 后端，统一承载：
 
 - `classification`：TCN 分类推理
-- `forecast`：LSTM 预测与回测
+- `forecast`：LSTM / Transformer 预测与回测
 - `agent`：LangChain 节能问答
 
 ## 目录说明
@@ -12,7 +12,7 @@
 - `app/config.py`：环境变量与路径配置
 - `app/bootstrap.py`：Robyn 路由注册
 - `configs/classification.yaml`：分类模型推理配置
-- `configs/forecast.yaml`：预测模型推理配置，默认指向 `models/forecast/LSTM/output`
+- `configs/forecast.yaml`：预测模型推理配置，支持在 `lstm` 与 `transformer` 之间切换
 - `configs/agent.yaml`：智能体配置
 - `app/services/classification_service.py`：分类推理封装
 - `app/services/forecast_service.py`：预测与回测封装
@@ -89,8 +89,9 @@ llm:
 
 ## 说明
 
-- 当前分类与预测已在 `models_agent/app/inference/` 内提供最小本地推理实现
+- 当前分类与预测已在 `models_agent/app/inference/` 内同步维护本地推理实现
 - 预测模块默认直接读取 `models/forecast/LSTM/output/best_model.pt`
+- 预测模块也支持直接读取 `models/forecast/transformer/output/best_model.pt`
 - 预测推理已兼容两种 checkpoint 归一化格式：旧版全局标准化，以及新版 `aggregate=input_window` 样本级归一化
 - 如需固定到独立副本，也可以自行改回 `models_agent/checkpoints/`
 - 若未配置 LangChain 依赖或 LLM 参数，智能体接口会自动降级为规则回答

@@ -200,6 +200,18 @@ export function DatasetDetailPage() {
     }
   }, [activeForecastId])
 
+  useEffect(() => {
+    const forecastOfSelectedModel = forecasts.find(
+      (item) => item.model_type === selectedModel,
+    )
+    if (!forecastOfSelectedModel) {
+      return
+    }
+    if (forecastOfSelectedModel.id !== activeForecastId) {
+      setActiveForecastId(forecastOfSelectedModel.id)
+    }
+  }, [activeForecastId, forecasts, selectedModel])
+
   const refreshForecasts = async () => {
     const items = await fetchForecasts(datasetId)
     setForecasts(items)
@@ -616,7 +628,13 @@ export function DatasetDetailPage() {
                       <Select
                         value={selectedModel}
                         style={{ width: 180 }}
-                        options={[{ label: forecastModelMap.lstm, value: 'lstm' }]}
+                        options={[
+                          { label: forecastModelMap.lstm, value: 'lstm' },
+                          {
+                            label: forecastModelMap.transformer,
+                            value: 'transformer',
+                          },
+                        ]}
                         onChange={(value: ForecastModelType) => setSelectedModel(value)}
                       />
                       <Button

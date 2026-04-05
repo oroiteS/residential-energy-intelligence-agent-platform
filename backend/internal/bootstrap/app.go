@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
@@ -69,7 +71,11 @@ func BuildApp(cfg *config.AppConfig) (*App, func(), error) {
 		agentSvcClient = agentclient.NewStubClient()
 		logger.Info("智能体客户端以 stub 模式启动")
 	} else {
-		agentSvcClient = agentclient.NewHTTPClient(cfg.AgentServiceBaseURL, cfg.RequestTimeout)
+		agentTimeout := cfg.RequestTimeout
+		if agentTimeout < 70*time.Second {
+			agentTimeout = 70 * time.Second
+		}
+		agentSvcClient = agentclient.NewHTTPClient(cfg.AgentServiceBaseURL, agentTimeout)
 	}
 
 	healthService := service.NewHealthService(db, modelSvcClient, agentSvcClient)

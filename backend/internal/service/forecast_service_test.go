@@ -43,3 +43,23 @@ func TestExpected15MinutePointsForSingleDay(t *testing.T) {
 		t.Fatalf("expected15MinutePoints() = %d, want 96", got)
 	}
 }
+
+func TestNormalizeForecastRequestSupportsTransformer(t *testing.T) {
+	modelType, granularity, appErr := normalizeForecastRequest("transformer", "15min")
+	if appErr != nil {
+		t.Fatalf("normalizeForecastRequest() returned unexpected error: %v", appErr)
+	}
+	if modelType != "transformer" {
+		t.Fatalf("modelType = %s, want transformer", modelType)
+	}
+	if granularity != "15min" {
+		t.Fatalf("granularity = %s, want 15min", granularity)
+	}
+}
+
+func TestNormalizeForecastRequestRejectsUnknownModel(t *testing.T) {
+	_, _, appErr := normalizeForecastRequest("gru", "15min")
+	if appErr == nil {
+		t.Fatalf("normalizeForecastRequest() error = nil, want invalid model error")
+	}
+}

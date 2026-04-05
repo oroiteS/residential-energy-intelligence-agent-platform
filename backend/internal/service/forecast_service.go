@@ -320,8 +320,8 @@ func normalizeForecastRequest(modelType, granularity string) (string, string, *a
 	if normalizedModelType == "" {
 		normalizedModelType = "lstm"
 	}
-	if normalizedModelType != "lstm" {
-		return "", "", apperror.Unprocessable("INVALID_REQUEST", "当前仅支持 lstm 预测模型", map[string]any{"model_type": modelType})
+	if normalizedModelType != "lstm" && normalizedModelType != "transformer" {
+		return "", "", apperror.Unprocessable("INVALID_REQUEST", "当前仅支持 lstm 或 transformer 预测模型", map[string]any{"model_type": modelType})
 	}
 
 	normalizedGranularity := strings.TrimSpace(strings.ToLower(granularity))

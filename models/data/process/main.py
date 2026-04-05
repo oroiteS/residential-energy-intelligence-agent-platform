@@ -115,11 +115,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     export_parser = subparsers.add_parser(
         "export-testing-samples",
-        help="导出前后端联调用的代表性测试样本",
+        help="从预测验证集导出前后端联调用的代表性测试样本",
         description=(
-            "从已处理的 15 分钟基础时序和分类标签中，"
-            "为某个家庭导出约 5 份代表不同用电场景的测试 CSV。"
+            "复用预测任务配置中的 train/val/test 划分，"
+            "仅从验证集里为某个家庭导出约 5 份代表不同用电场景的测试 CSV。"
         ),
+    )
+    export_parser.add_argument(
+        "--forecast-config",
+        type=Path,
+        default=Path("forecast/LSTM/configs/config.yaml"),
+        help="预测模型配置文件路径，复用其中的数据切分参数，默认: %(default)s",
     )
     export_parser.add_argument(
         "--base-dir",
@@ -136,8 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data/processed/testing_samples"),
-        help="测试样本输出目录，默认: %(default)s",
+        default=Path("data/processed/testing"),
+        help="testing 样本输出目录，默认: %(default)s",
     )
     export_parser.add_argument(
         "--house-id",
@@ -242,6 +248,7 @@ def main() -> None:
             base_dir=args.base_dir,
             labels_path=args.labels_path,
             output_dir=args.output_dir,
+            forecast_config_path=args.forecast_config,
             house_id=args.house_id,
             count=args.count,
             window_days=args.window_days,
@@ -250,7 +257,7 @@ def main() -> None:
             print("未导出任何测试样本")
             return
         print(
-            "已导出代表性测试样本，"
+            "已从验证集导出代表性测试样本，"
             f"家庭: {exported_samples[0]['house_id']}，"
             f"样本数: {len(exported_samples)}，"
             f"输出目录: {exported_samples[0]['output_dir']}"
