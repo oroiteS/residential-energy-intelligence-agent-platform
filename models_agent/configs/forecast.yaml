@@ -13,7 +13,7 @@ data:
   aggregate_norm_eps: 1.0e-6
 
 lstm:
-  train_output_dir: "../models/forecast/LSTM/output"
+  train_output_dir: "../models_agent/checkpoints/forecast/lstm"
   model:
     input_size: 5
     hidden_size: 256
@@ -21,11 +21,11 @@ lstm:
     dropout: 0.2
     target_length: 96
   predict:
-    checkpoint_path: "../models/forecast/LSTM/output/best_model.pt"
+    checkpoint_path: "../models_agent/checkpoints/forecast/lstm/best_model.pt"
     batch_size: 128
 
 transformer:
-  train_output_dir: "../models/forecast/transformer/output"
+  train_output_dir: "../models_agent/checkpoints/forecast/transformer"
   model:
     input_size: 5
     d_model: 128
@@ -37,5 +37,5 @@ transformer:
     patch_length: 16
     patch_stride: 8
   predict:
-    checkpoint_path: "../models/forecast/transformer/output/best_model.pt"
+    checkpoint_path: "../models_agent/checkpoints/forecast/transformer/best_model.pt"
     batch_size: 128

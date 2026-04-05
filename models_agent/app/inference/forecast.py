@@ -149,7 +149,12 @@ def load_config(config_path: Path) -> ForecastExperimentConfig:
     lstm_model_raw = lstm_raw.get("model", {})
     lstm_predict_raw = lstm_raw.get("predict", {})
     lstm_train_output_dir = _resolve_path(
-        str(lstm_raw.get("train_output_dir", "../models/forecast/LSTM/output")),
+        str(
+            lstm_raw.get(
+                "train_output_dir",
+                "../models_agent/checkpoints/forecast/lstm",
+            )
+        ),
         base_dir,
     )
     lstm_runtime = LSTMRuntimeConfig(
@@ -171,7 +176,7 @@ def load_config(config_path: Path) -> ForecastExperimentConfig:
         str(
             transformer_raw.get(
                 "train_output_dir",
-                "../models/forecast/transformer/output",
+                "../models_agent/checkpoints/forecast/transformer",
             )
         ),
         base_dir,
