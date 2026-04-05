@@ -486,7 +486,9 @@ export async function askAssistant(input: {
       .appendChatExchange(input.dataset_id, input.session_id, input.question)
   }
 
-  const { data } = await http.post<ApiEnvelope<AssistantAnswer>>('/agent/ask', input)
+  const { data } = await http.post<ApiEnvelope<AssistantAnswer>>('/agent/ask', input, {
+    timeout: 70000,
+  })
   return data.data
 }
 

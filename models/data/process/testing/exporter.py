@@ -1,12 +1,15 @@
-"""导出前后端联调用的代表性测试样本。"""
+"""导出基于预测验证集的前后端联调用测试样本。"""
 
 from __future__ import annotations
 
+import random
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
 
 import pandas as pd
+import yaml
 
 from data.process.common.base import select_complete_days
 
@@ -16,6 +19,136 @@ LABEL_SCENARIOS = (
     "all_day_high",
     "all_day_low",
 )
+MODELS_ROOT = Path(__file__).resolve().parents[3]
+
+
+@dataclass(slots=True)
+class ForecastSplitConfig:
+    data_path: Path
+    split_mode: str
+    train_ratio: float
+    val_ratio: float
+    seed: int
+    feature_names: list[str]
+
+
+def _resolve_models_relative_path(path_value: str, models_root: Path) -> Path:
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return (models_root / path).resolve()
+
+
+def _load_forecast_split_config(config_path: Path) -> ForecastSplitConfig:
+    resolved_config_path = config_path.resolve()
+    if not resolved_config_path.exists():
+        raise FileNotFoundError(f"未找到预测配置文件: {resolved_config_path}")
+
+    raw_config = yaml.safe_load(resolved_config_path.read_text(encoding="utf-8")) or {}
+    data_raw = raw_config.get("data")
+    train_raw = raw_config.get("train")
+    if not isinstance(data_raw, dict):
+        raise ValueError(f"预测配置缺少 data 段: {resolved_config_path}")
+    if not isinstance(train_raw, dict):
+        raise ValueError(f"预测配置缺少 train 段: {resolved_config_path}")
+
+    data_path_value = data_raw.get("data_path")
+    if not data_path_value:
+        raise ValueError(f"预测配置缺少 data.data_path: {resolved_config_path}")
+
+    feature_names = [
+        str(item)
+        for item in data_raw.get(
+            "feature_names",
+            ["aggregate", "slot_sin", "slot_cos", "weekday_sin", "weekday_cos"],
+        )
+    ]
+    if not feature_names:
+        raise ValueError(f"预测配置中的 data.feature_names 不能为空: {resolved_config_path}")
+
+    return ForecastSplitConfig(
+        data_path=_resolve_models_relative_path(str(data_path_value), MODELS_ROOT),
+        split_mode=str(data_raw.get("split_mode", "by_house")),
+        train_ratio=float(data_raw.get("train_ratio", 0.7)),
+        val_ratio=float(data_raw.get("val_ratio", 0.15)),
+        seed=int(train_raw.get("seed", 42)),
+        feature_names=feature_names,
+    )
+
+
+def _load_validation_forecast_index(config_path: Path) -> pd.DataFrame:
+    split_config = _load_forecast_split_config(config_path)
+    sample_index = pd.read_csv(
+        split_config.data_path,
+        usecols=[
+            "sample_id",
+            "house_id",
+            "input_start",
+            "input_end",
+            "target_start",
+            "target_end",
+        ],
+    )
+    sample_index["house_id"] = sample_index["house_id"].astype(str)
+    if sample_index.empty:
+        raise ValueError(f"预测样本文件为空: {split_config.data_path}")
+
+    rng = random.Random(split_config.seed)
+    if split_config.split_mode == "by_house":
+        unique_houses = sorted(sample_index["house_id"].unique().tolist())
+        if len(unique_houses) < 3:
+            raise ValueError("按家庭切分至少需要 3 个不同家庭")
+        shuffled_houses = unique_houses.copy()
+        rng.shuffle(shuffled_houses)
+        _, validation_houses, _ = _split_by_ratio(
+            shuffled_houses,
+            train_ratio=split_config.train_ratio,
+            val_ratio=split_config.val_ratio,
+        )
+        validation_index = sample_index.loc[
+            sample_index["house_id"].isin(set(validation_houses))
+        ].copy()
+    else:
+        shuffled_positions = list(range(len(sample_index)))
+        rng.shuffle(shuffled_positions)
+        _, validation_positions, _ = _split_by_ratio(
+            shuffled_positions,
+            train_ratio=split_config.train_ratio,
+            val_ratio=split_config.val_ratio,
+        )
+        validation_index = sample_index.iloc[validation_positions].copy()
+
+    if validation_index.empty:
+        raise ValueError("预测验证集为空，无法导出 testing 样本")
+
+    validation_index["target_date"] = pd.to_datetime(
+        validation_index["target_start"]
+    ).dt.date
+    return validation_index
+
+
+def _split_by_ratio(
+    values: list[object],
+    train_ratio: float,
+    val_ratio: float,
+) -> tuple[list[object], list[object], list[object]]:
+    total = len(values)
+    if total < 3:
+        raise ValueError("样本数过少，无法切分训练/验证/测试集")
+
+    train_end = max(1, int(total * train_ratio))
+    val_end = max(train_end + 1, int(total * (train_ratio + val_ratio)))
+    val_end = min(val_end, total - 1)
+
+    train_values = values[:train_end]
+    val_values = values[train_end:val_end]
+    test_values = values[val_end:]
+
+    if not val_values:
+        val_values = [train_values.pop()]
+    if not test_values:
+        test_values = [val_values.pop()]
+    return train_values, val_values, test_values
 
 
 def _normalize_house_id(house_id: str | None) -> str | None:
@@ -40,12 +173,21 @@ def _load_labels(labels_path: Path) -> pd.DataFrame:
     return labels_df
 
 
-def _infer_house_id(labels_df: pd.DataFrame) -> str:
+def _infer_house_id(
+    labels_df: pd.DataFrame,
+    validation_index: pd.DataFrame,
+) -> str:
+    candidate_df = validation_index.merge(
+        labels_df[["house_id", "date", "label_name"]],
+        left_on=["house_id", "target_date"],
+        right_on=["house_id", "date"],
+        how="left",
+    )
     house_rank = (
-        labels_df.groupby("house_id")
+        candidate_df.groupby("house_id")
         .agg(
             label_count=("label_name", "nunique"),
-            sample_count=("date", "size"),
+            sample_count=("target_date", "size"),
         )
         .reset_index()
         .sort_values(
@@ -54,7 +196,7 @@ def _infer_house_id(labels_df: pd.DataFrame) -> str:
         )
     )
     if house_rank.empty:
-        raise ValueError("分类标签中没有可用的家庭数据")
+        raise ValueError("验证集中没有可用的家庭数据")
     return str(house_rank.iloc[0]["house_id"])
 
 
@@ -79,9 +221,11 @@ def _has_contiguous_window(valid_dates: set[date], target_date: date, window_day
 def _build_day_summary(
     house_base_df: pd.DataFrame,
     house_labels_df: pd.DataFrame,
+    validation_samples_df: pd.DataFrame,
     window_days: int,
 ) -> pd.DataFrame:
     complete_df = select_complete_days(house_base_df)
+    valid_dates = set(complete_df["date"])
     day_summary = (
         complete_df.groupby("date")
         .agg(
@@ -99,10 +243,15 @@ def _build_day_summary(
         how="left",
         suffixes=("", "_label"),
     )
-    valid_dates = set(day_summary["date"])
     day_summary["window_ok"] = day_summary["date"].apply(
         lambda item: _has_contiguous_window(valid_dates, item, window_days)
     )
+    validation_target_dates = set(validation_samples_df["target_date"])
+    day_summary = day_summary.loc[
+        day_summary["date"].isin(validation_target_dates)
+    ].copy()
+    validation_sample_map = validation_samples_df.set_index("target_date")["sample_id"]
+    day_summary["sample_id"] = day_summary["date"].map(validation_sample_map)
     return day_summary.sort_values("date").reset_index(drop=True)
 
 
@@ -129,6 +278,7 @@ def _pick_label_day(
         "scenario_name": label_name,
         "target_date": row["date"],
         "label_name": row["label_name"],
+        "sample_id": row["sample_id"],
     }
 
 
@@ -153,6 +303,7 @@ def _pick_by_ranking(
         "scenario_name": scenario_name,
         "target_date": row["date"],
         "label_name": row.get("label_name"),
+        "sample_id": row.get("sample_id"),
     }
 
 
@@ -228,6 +379,7 @@ def _choose_scenarios(day_summary: pd.DataFrame, count: int) -> list[dict[str, o
                     "scenario_name": f"extra_{len(selections) + 1:02d}",
                     "target_date": row.date,
                     "label_name": getattr(row, "label_name", None),
+                    "sample_id": getattr(row, "sample_id", None),
                 }
             )
             selected_dates.add(row.date)
@@ -239,18 +391,29 @@ def export_representative_test_samples(
     base_dir: Path,
     labels_path: Path,
     output_dir: Path,
+    forecast_config_path: Path,
     house_id: str | None = None,
     count: int = 5,
     window_days: int = 7,
 ) -> list[dict[str, object]]:
-    """导出约 5 份代表不同用电场景的测试 CSV。"""
+    """仅基于预测验证集导出约 5 份代表不同用电场景的测试 CSV。"""
     if count <= 0:
         raise ValueError("count 必须大于 0")
     if window_days <= 0:
         raise ValueError("window_days 必须大于 0")
 
     labels_df = _load_labels(labels_path)
-    normalized_house_id = _normalize_house_id(house_id) or _infer_house_id(labels_df)
+    validation_index = _load_validation_forecast_index(forecast_config_path)
+    normalized_house_id = _normalize_house_id(house_id) or _infer_house_id(
+        labels_df=labels_df,
+        validation_index=validation_index,
+    )
+
+    house_validation_df = validation_index.loc[
+        validation_index["house_id"] == normalized_house_id
+    ].copy()
+    if house_validation_df.empty:
+        raise ValueError(f"在预测验证集中未找到家庭 {normalized_house_id}")
 
     house_labels_df = labels_df.loc[labels_df["house_id"] == normalized_house_id].copy()
     if house_labels_df.empty:
@@ -260,11 +423,12 @@ def export_representative_test_samples(
     day_summary = _build_day_summary(
         house_base_df=house_base_df,
         house_labels_df=house_labels_df,
+        validation_samples_df=house_validation_df,
         window_days=window_days,
     )
     selections = _choose_scenarios(day_summary=day_summary, count=count)
     if not selections:
-        raise ValueError(f"家庭 {normalized_house_id} 没有可导出的连续样本窗口")
+        raise ValueError(f"家庭 {normalized_house_id} 在验证集中没有可导出的连续样本窗口")
 
     complete_df = select_complete_days(house_base_df)
     sample_output_dir = output_dir / f"house_{normalized_house_id}"
@@ -296,6 +460,7 @@ def export_representative_test_samples(
                 "house_id": normalized_house_id,
                 "scenario_name": selection["scenario_name"],
                 "label_name": selection["label_name"],
+                "sample_id": selection["sample_id"],
                 "target_date": target_date.isoformat(),
                 "window_start": window_start.isoformat(),
                 "window_days": window_days,
