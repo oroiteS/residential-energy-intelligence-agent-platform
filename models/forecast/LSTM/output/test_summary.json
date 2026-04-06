@@ -1,16 +1,16 @@
 {
-  "checkpoint_path": "/root/gp/models/forecast/LSTM/output/best_model.pt",
+  "checkpoint_path": "/root/reiap/models/forecast/LSTM/output/best_model.pt",
   "metrics": {
-    "mae": 277.9256591796875,
-    "rmse": 540.5628662109375,
-    "smape": 54.16515350341797,
-    "wape": 26.933692932128906,
-    "loss": 0.39832790490309633,
-    "elapsed_seconds": 3.5057570934295654
+    "mae": 272.29107666015625,
+    "rmse": 534.7796020507812,
+    "smape": 53.536964416503906,
+    "wape": 26.387649536132812,
+    "loss": 0.3941379235807628,
+    "elapsed_seconds": 5.816037178039551
   },
   "config": {
     "data": {
-      "data_path": "/root/gp/models/data/processed/forecast/forecast_samples.csv",
+      "data_path": "/root/reiap/models/data/processed/forecast/forecast_samples.csv",
       "split_mode": "by_house",
       "train_ratio": 0.7,
       "val_ratio": 0.15,
@@ -33,9 +33,9 @@
       "teacher_forcing_ratio": 0.5
     },
     "train": {
-      "output_dir": "/root/gp/models/forecast/LSTM/output",
+      "output_dir": "/root/reiap/models/forecast/LSTM/output",
       "batch_size": 1024,
-      "epochs": 500,
+      "epochs": 200,
       "learning_rate": 0.0002,
       "weight_decay": 0.0001,
       "gradient_clip_norm": 1.0,
@@ -47,12 +47,12 @@
     },
     "test": {
       "checkpoint_path": null,
-      "output_dir": "/root/gp/models/forecast/LSTM/output",
+      "output_dir": "/root/reiap/models/forecast/LSTM/output",
       "batch_size": 1024
     },
     "predict": {
       "checkpoint_path": null,
-      "output_dir": "/root/gp/models/forecast/LSTM/output",
+      "output_dir": "/root/reiap/models/forecast/LSTM/output",
       "batch_size": 1024
     }
   },

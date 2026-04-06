@@ -42,7 +42,7 @@ train:
   # 每个 batch 的样本数
   batch_size: 1024
   # 训练轮数
-  epochs: 500
+  epochs: 200
   # Adam 优化器学习率
   learning_rate: 0.0002
   # Adam 优化器权重衰减系数
