@@ -90,9 +90,11 @@ llm:
 ## 说明
 
 - 当前分类与预测已在 `models_agent/app/inference/` 内同步维护本地推理实现
-- 预测模块默认直接读取 `models/forecast/LSTM/output/best_model.pt`
-- 预测模块也支持直接读取 `models/forecast/transformer/output/best_model.pt`
+- 默认只读取 `models_agent/checkpoints/` 下的本地权重，不再依赖外部 `models/` 目录
+- 分类权重固定放在 `models_agent/checkpoints/classification/tcn/best_model.pt`
+- LSTM 权重固定放在 `models_agent/checkpoints/forecast/lstm/best_model.pt`
+- Transformer 权重固定放在 `models_agent/checkpoints/forecast/transformer/best_model.pt`
+- 后续更新模型时，只需要覆盖对应位置的 `best_model.pt`，无需再改代码或配置
 - 预测推理已兼容两种 checkpoint 归一化格式：旧版全局标准化，以及新版 `aggregate=input_window` 样本级归一化
-- 如需固定到独立副本，也可以自行改回 `models_agent/checkpoints/`
 - 若未配置 LangChain 依赖或 LLM 参数，智能体接口会自动降级为规则回答
 - 目前保留 `models_agent` 目录名以减少改动；若后续想长期维护，更推荐改名为 `python_backend`

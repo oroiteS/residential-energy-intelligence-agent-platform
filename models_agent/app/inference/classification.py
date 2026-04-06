@@ -86,7 +86,12 @@ def load_config(config_path: Path) -> ClassificationExperimentConfig:
         dropout=float(model_raw.get("dropout", 0.2)),
     )
     train_output_dir = _resolve_path(
-        str(train_raw.get("output_dir", "../models/classification/TCN/output")),
+        str(
+            train_raw.get(
+                "output_dir",
+                "../models_agent/checkpoints/classification/tcn",
+            )
+        ),
         base_dir,
     )
     checkpoint_raw = predict_raw.get("checkpoint_path")

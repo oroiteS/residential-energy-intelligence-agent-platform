@@ -19,8 +19,8 @@ model:
   dropout: 0.2
 
 train:
-  output_dir: "../models/classification/TCN/output"
+  output_dir: "../models_agent/checkpoints/classification/tcn"
 
 predict:
-  checkpoint_path: "../models/classification/TCN/output/best_model.pt"
+  checkpoint_path: "../models_agent/checkpoints/classification/tcn/best_model.pt"
   batch_size: 128
