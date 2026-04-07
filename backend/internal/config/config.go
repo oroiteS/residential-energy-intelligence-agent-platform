@@ -23,6 +23,9 @@ type AppConfig struct {
 	UseStubClients      bool
 	DataUploadDir       string
 	OutputRootDir       string
+	ReportPDFTheme      string
+	ReportPDFCover      bool
+	ReportPDFTOC        bool
 }
 
 func Load() (*AppConfig, error) {
@@ -43,6 +46,9 @@ func Load() (*AppConfig, error) {
 		UseStubClients: parseBoolEnv("USE_STUB_CLIENTS", true),
 		DataUploadDir:  getenv("DATA_UPLOAD_DIR", "./uploads/datasets"),
 		OutputRootDir:  getenv("OUTPUT_ROOT_DIR", "./outputs"),
+		ReportPDFTheme: getenv("REPORT_PDF_THEME", "github-light"),
+		ReportPDFCover: parseBoolEnv("REPORT_PDF_COVER", false),
+		ReportPDFTOC:   parseBoolEnv("REPORT_PDF_TOC", false),
 	}
 	pythonServiceBaseURL := strings.TrimSpace(os.Getenv("PYTHON_SERVICE_BASE_URL"))
 	modelServiceBaseURL := strings.TrimSpace(os.Getenv("MODEL_SERVICE_BASE_URL"))

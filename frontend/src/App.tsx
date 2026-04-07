@@ -18,11 +18,11 @@ const ChatPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('@/pages/SettingsPage').then((module) => ({ default: module.SettingsPage })),
 )
+const LivePage = lazy(() =>
+  import('@/pages/LivePage').then((module) => ({ default: module.LivePage })),
+)
 const ReportsPage = lazy(() =>
   import('@/pages/ReportsPage').then((module) => ({ default: module.ReportsPage })),
-)
-const LlmConfigsPage = lazy(() =>
-  import('@/pages/LlmConfigsPage').then((module) => ({ default: module.LlmConfigsPage })),
 )
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
@@ -43,9 +43,10 @@ function App() {
           <Route path="/datasets" element={<DatasetsPage />} />
           <Route path="/datasets/:datasetId" element={<DatasetDetailPage />} />
           <Route path="/chat" element={<ChatPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/overview" element={<SettingsPage />} />
+          <Route path="/settings" element={<Navigate to="/overview" replace />} />
+          <Route path="/live" element={<LivePage />} />
           <Route path="/reports" element={<ReportsPage />} />
-          <Route path="/llm-configs" element={<LlmConfigsPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </Suspense>

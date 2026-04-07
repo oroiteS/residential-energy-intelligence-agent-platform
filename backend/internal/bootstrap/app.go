@@ -36,7 +36,6 @@ func BuildApp(cfg *config.AppConfig) (*App, func(), error) {
 	executor := job.NewInMemoryExecutor()
 
 	var systemConfigRepo repository.SystemConfigRepository
-	var llmConfigRepo repository.LLMConfigRepository
 	var datasetRepo repository.DatasetRepository
 	var analysisRepo repository.AnalysisResultRepository
 	var classificationRepo repository.ClassificationResultRepository
@@ -47,7 +46,6 @@ func BuildApp(cfg *config.AppConfig) (*App, func(), error) {
 	var reportRepo repository.ReportRepository
 	if db != nil {
 		systemConfigRepo = repository.NewSystemConfigRepository(db)
-		llmConfigRepo = repository.NewLLMConfigRepository(db)
 		datasetRepo = repository.NewDatasetRepository(db)
 		analysisRepo = repository.NewAnalysisResultRepository(db)
 		classificationRepo = repository.NewClassificationResultRepository(db)
@@ -72,29 +70,27 @@ func BuildApp(cfg *config.AppConfig) (*App, func(), error) {
 		logger.Info("智能体客户端以 stub 模式启动")
 	} else {
 		agentTimeout := cfg.RequestTimeout
-		if agentTimeout < 70*time.Second {
-			agentTimeout = 70 * time.Second
+		if agentTimeout < 180*time.Second {
+			agentTimeout = 180 * time.Second
 		}
 		agentSvcClient = agentclient.NewHTTPClient(cfg.AgentServiceBaseURL, agentTimeout)
 	}
 
 	healthService := service.NewHealthService(db, modelSvcClient, agentSvcClient)
 	systemConfigService := service.NewSystemConfigService(db, systemConfigRepo, logger)
-	llmConfigService := service.NewLLMConfigService(db, llmConfigRepo, systemConfigRepo, logger)
 	chatService := service.NewChatService(cfg, datasetRepo, chatSessionRepo, chatMessageRepo)
 	analysisService := service.NewAnalysisService(cfg, datasetRepo, analysisRepo, systemConfigService, logger)
 	classificationService := service.NewClassificationService(cfg, datasetRepo, classificationRepo, systemConfigService, modelSvcClient, logger)
 	forecastService := service.NewForecastService(cfg, datasetRepo, forecastRepo, systemConfigService, modelSvcClient, logger)
 	agentService := service.NewAgentService(cfg, datasetRepo, chatSessionRepo, chatMessageRepo, analysisRepo, classificationRepo, forecastRepo, adviceRepo, systemConfigService, agentSvcClient, logger)
 	adviceService := service.NewAdviceService(cfg, datasetRepo, analysisRepo, adviceRepo, logger)
-	reportService := service.NewReportService(cfg, datasetRepo, analysisRepo, adviceRepo, reportRepo, logger)
+	reportService := service.NewReportService(cfg, datasetRepo, analysisRepo, adviceRepo, reportRepo, agentService, logger)
 	datasetService := service.NewDatasetService(cfg, datasetRepo, analysisRepo, forecastRepo, adviceRepo, reportRepo, executor, analysisService, logger)
 
 	engine := router.New(router.Dependencies{
 		Logger:                logger,
 		HealthHandler:         handler.NewHealthHandler(healthService),
 		SystemConfigHandler:   handler.NewSystemConfigHandler(systemConfigService),
-		LLMConfigHandler:      handler.NewLLMConfigHandler(llmConfigService),
 		DatasetHandler:        handler.NewDatasetHandler(datasetService),
 		ChatHandler:           handler.NewChatHandler(chatService),
 		AnalysisHandler:       handler.NewAnalysisHandler(analysisService),

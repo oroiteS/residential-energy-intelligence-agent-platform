@@ -62,3 +62,13 @@ export function formatFileSize(value: number) {
 
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
+
+export function formatFileLabel(value: string | null | undefined) {
+  if (!value) {
+    return '--'
+  }
+
+  const normalized = value.replace(/\\/g, '/')
+  const segments = normalized.split('/').filter(Boolean)
+  return segments.at(-1) ?? value
+}

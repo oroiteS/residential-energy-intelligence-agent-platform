@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -66,15 +65,6 @@ func (s *SystemConfigService) Get(ctx context.Context) (*domain.SystemRuntimeCon
 			config.DataUploadDir = record.ConfigValue
 		case "report_output_dir":
 			config.ReportOutputDir = record.ConfigValue
-		case "default_llm_id":
-			value, parseErr := strconv.ParseUint(record.ConfigValue, 10, 64)
-			if parseErr != nil {
-				if s.logger != nil {
-					s.logger.Warn("default_llm_id 解析失败", zap.String("value", record.ConfigValue), zap.Error(parseErr))
-				}
-				continue
-			}
-			config.DefaultLLMID = &value
 		}
 	}
 
@@ -95,7 +85,6 @@ func defaultSystemRuntimeConfig() *domain.SystemRuntimeConfig {
 		EnergyAdvicePromptTemplate: "这是居民过去{{history_days}}天的实际用电情况、未来一段时间的预测用电情况，以及居民用电行为分类。请基于统计分析结果、历史用电摘要、未来预测摘要和分类结果，给出具体、可执行、可解释的节能建议，并指出关键依据。",
 		DataUploadDir:              "./uploads/datasets",
 		ReportOutputDir:            "./outputs/reports",
-		DefaultLLMID:               nil,
 	}
 }
 
@@ -209,14 +198,6 @@ func buildSystemConfigRecords(config *domain.SystemRuntimeConfig) ([]domain.Syst
 			ConfigValue: config.ReportOutputDir,
 			Description: stringPtr("报告输出目录"),
 		},
-	}
-
-	if config.DefaultLLMID != nil {
-		records = append(records, domain.SystemConfigRecord{
-			ConfigKey:   "default_llm_id",
-			ConfigValue: strconv.FormatUint(*config.DefaultLLMID, 10),
-			Description: stringPtr("默认 LLM 配置 ID"),
-		})
 	}
 
 	return records, nil

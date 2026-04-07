@@ -63,3 +63,40 @@ func TestNormalizeForecastRequestRejectsUnknownModel(t *testing.T) {
 		t.Fatalf("normalizeForecastRequest() error = nil, want invalid model error")
 	}
 }
+
+func TestValidateFutureForecastWindowSupportsThreeFutureDays(t *testing.T) {
+	datasetEnd := time.Date(2026, 4, 7, 23, 45, 0, 0, time.Local)
+	start := time.Date(2026, 4, 10, 0, 0, 0, 0, time.Local)
+	end := start.Add(95 * 15 * time.Minute)
+
+	dayOffset, appErr := validateFutureForecastWindow(datasetEnd, start, end)
+	if appErr != nil {
+		t.Fatalf("validateFutureForecastWindow() returned unexpected error: %v", appErr)
+	}
+	if dayOffset != 3 {
+		t.Fatalf("dayOffset = %d, want 3", dayOffset)
+	}
+}
+
+func TestValidateFutureForecastWindowRejectsOutOfRangeDay(t *testing.T) {
+	datasetEnd := time.Date(2026, 4, 7, 23, 45, 0, 0, time.Local)
+	start := time.Date(2026, 4, 11, 0, 0, 0, 0, time.Local)
+	end := start.Add(95 * 15 * time.Minute)
+
+	_, appErr := validateFutureForecastWindow(datasetEnd, start, end)
+	if appErr == nil {
+		t.Fatal("validateFutureForecastWindow() error = nil, want out of range error")
+	}
+}
+
+func TestBuildForecastSeriesClampsNegativeValues(t *testing.T) {
+	start := time.Date(2026, 4, 8, 0, 0, 0, 0, time.Local)
+	series := buildForecastSeries(start, []float64{-12.5, 18.0})
+
+	if got := series[0].Predicted; got != 0 {
+		t.Fatalf("series[0].Predicted = %f, want 0", got)
+	}
+	if got := series[1].Predicted; got != 18.0 {
+		t.Fatalf("series[1].Predicted = %f, want 18.0", got)
+	}
+}

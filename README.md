@@ -1,181 +1,213 @@
-# 居民用电分析和节能建议智能体系统
+# 居民用电分析与节能建议智能体系统
 
-面向毕业设计的本地化居民用电分析系统，包含：
+面向毕业设计的本地化居民用电分析系统，覆盖数据导入、统计分析、
+行为分类、负荷预测、节能建议与问答展示。
 
-- `models/`：离线数据预处理、TCN 分类训练、LSTM/Transformer 预测训练
-- `models_agent/`：基于 Robyn 的 Python 推理与节能问答服务
-- `backend/`：Go + Gin 主服务，负责数据集管理、统计分析、报告导出和调用 Python 服务
+当前仓库已经包含可运行的五个核心部分：
+
 - `frontend/`：React + Vite 前端仪表盘
+- `backend/`：Go + Gin 主服务
+- `models_agent/`：Robyn 推理与节能问答服务
+- `models/`：离线数据处理、分类训练、预测训练
+- `live/`：独立实时演示模块，循环播放测试集连续窗口样本并实时推送展示
 
-系统目标是把一份居民用电数据，从导入、清洗、统计分析、行为分类、负荷预测，一路串到前端展示和节能建议生成。
+当前报告导出支持：
 
-## 当前技术栈
+- `PDF`：由智能体先整理摘要正文，再由后端生成正式报告文件
 
-- 后端主服务：Go 1.25 + Gin + GORM + MySQL 8
-- Python 建模：Python 3.10+ + PyTorch 2.7+ + `uv`
-- Python 服务：Robyn + LangChain
-- 前端：React + TypeScript + Vite + Ant Design + ECharts
-- 包管理：`uv`、`pnpm`
+## 文档导航
+
+`doc/` 已按“总览 / 接口 / 数据库 / 建模”收敛，建议按下面顺序阅读：
+
+1. `doc/README.md`：文档索引与边界说明
+2. `doc/chinese_project.md`：项目范围、模块职责、部署口径
+3. `doc/api_design.md`：前后端与模型服务接口契约
+4. `doc/database_design.md`：数据库设计
+5. `doc/model_data_pipeline.md`：训练数据流水线
+
+说明：
+
+- `doc/schema.sql` 为 MySQL 初始化脚本
 
 ## 仓库结构
 
 ```text
 backend/       Go 主服务
-doc/           需求、数据库、数据流水线设计文档
+doc/           项目文档
 frontend/      React 前端
-models/        预处理、分类训练、预测训练
-models_agent/  Robyn 推理/智能体服务
+live/          独立实时演示模块
+models/        离线训练与数据处理
+models_agent/  Python 推理与智能体服务
+docker-compose.yml
+docker-compose.cuda.yml
+scripts/deploy/
 ```
 
-## 完整拿到手流程
+## 脚本化启动
 
-下面这套流程是“新机器、本地第一次跑通项目”的推荐顺序。
+现在默认推荐纯本地进程启动，不再依赖 `docker compose` 拉起
+`backend / frontend / models_agent / live`。你只需要自行准备一个可用的
+`MySQL`，其余服务可由脚本统一启动。
 
-### 1. 准备环境
-
-建议先安装这些基础依赖：
-
-- Go 1.25+
-- Python 3.10+
-- `uv`
-- Node.js 20+
-- `pnpm`
-- Docker Desktop 或可用的 Docker Engine
-
-如果你有 GPU，可以使用 CUDA；没有也没关系，`models/` 里的训练和推理会自动按 `cuda -> mps -> cpu` 选择设备。
-
-### 2. 克隆项目
+启动前建议先准备根目录环境变量：
 
 ```bash
-git clone <your-repo-url>
-cd gp
+cp .env.example .env
 ```
 
-### 3. 启动 MySQL
+至少确认以下内容：
 
-仓库根目录已经提供了 MySQL 8 的 `docker-compose.yml`，首次启动时会自动执行 [doc/schema.sql](/Users/syn/my/projects/gp/doc/schema.sql) 建表。
+- `MYSQL_DSN` 指向你本机已启动的 MySQL
+- `LLM_*` 已按需配置
+- 如需修改端口，可同步调整对应服务环境变量
+
+### Apple Silicon + MPS
 
 ```bash
-docker compose up -d db
+./scripts/deploy/start-apple-mps.sh
 ```
-
-确认数据库可用：
-
-```bash
-docker compose ps
-```
-
-默认数据库信息：
-
-- host: `127.0.0.1`
-- port: `3306`
-- database: `resident`
-- user: `root`
-- password: `root`
-
-### 4. 安装 `models/` 依赖并生成训练数据
-
-`models/data/raw/` 目录下放的是离线训练用的 REFIT 数据。第一次拿到项目后，先把 15 分钟基础时序、分类数据集、预测数据集全部生成出来。
 
 说明：
 
-- 由于 REFIT 原始 CSV 体积过大，仓库默认不提交 `models/data/raw/*.csv`
-- 请自行下载并放入 `models/data/raw/`
-- 官方数据集地址：<https://pureportal.strath.ac.uk/en/datasets/refit-electrical-load-measurements-cleaned/>
+- 等价于执行 `./scripts/deploy/start-local.sh`
+- 会本地启动 `models_agent / backend / frontend / live`
+- 所有日志写入 `.run/logs/`
 
-使用 `uv`：
-
-```bash
-cd models
-uv sync
-uv run python data/process/main.py run-all
-```
-
-使用标准 `pip`：
+### Linux + CUDA
 
 ```bash
-cd models
-python -m venv .venv
-source .venv/bin/activate  # Windows 改成 .venv\Scripts\activate
-pip install -r requirements.txt
-python data/process/main.py run-all
+./scripts/deploy/start-linux-cuda.sh
 ```
 
-如果只想单独执行某一步，也可以：
+说明：
+
+- 等价于执行 `./scripts/deploy/start-local.sh`
+- 需要宿主机本地 Python / Go / pnpm 环境已可用
+
+### 通用 CPU
 
 ```bash
-uv run python data/process/main.py preprocess-base
-uv run python data/process/main.py build-classification
-uv run python data/process/main.py build-forecast
+./scripts/deploy/start-cpu.sh
 ```
 
-### 5. 训练分类和预测模型
-
-先训练分类 TCN，再训练预测 LSTM。Transformer 预测是实验对照项，可选。
+### 统一本地启动
 
 ```bash
-cd models
-uv run python classification/TCN/main.py train
-uv run python forecast/LSTM/main.py train
+./scripts/deploy/start-local.sh
 ```
 
-可选的 Transformer 对照实验：
+### 统一停止
 
 ```bash
-cd models
-uv run python forecast/GPT/main.py train
+./scripts/deploy/stop.sh
 ```
 
-训练产物默认会写到：
+说明：
 
-- `models/classification/TCN/output/`
-- `models/forecast/LSTM/output/`
-- `models/forecast/GPT/output/`
+- 等价于执行 `./scripts/deploy/stop-local.sh`
+- 会停止 `frontend / live / backend / models_agent`
 
-### 6. 让 `models_agent` 能读取训练好的权重
+## Docker 直接命令
 
-`models_agent` 的预测配置默认直接读取 `models/forecast/LSTM/output/best_model.pt`，所以 LSTM 训练完即可直接用。
+如果你仍然想直接使用 `docker compose`，仓库中仍保留了相关配置；
+但当前默认推荐使用上面的本地脚本模式。
 
-分类服务默认读取 `models_agent/checkpoints/classification/best_model.pt`，因此第一次跑通时需要把 TCN 最优权重复制过去：
+默认编排会启动完整 CPU 栈：
+
+- `db`：MySQL 8
+- `models-agent`：Python 推理与智能体服务
+- `backend`：Go API
+- `frontend`：Nginx 托管前端并反向代理 `/api`
+- `live`：独立实时演示服务，提供循环连续窗口样本播放页面与 SSE 实时流
+
+如需配置 LLM 或切换 Python 服务地址，先准备根目录环境变量文件：
 
 ```bash
-mkdir -p models_agent/checkpoints/classification
-cp models/classification/TCN/output/best_model.pt models_agent/checkpoints/classification/best_model.pt
+cp .env.example .env
 ```
 
-如果你不想复制文件，也可以直接修改 [models_agent/configs/classification.yaml](/Users/syn/my/projects/gp/models_agent/configs/classification.yaml) 的 `predict.checkpoint_path`。
+如果你的网络环境无法直接访问 Docker Hub，建议同时在 `.env` 中设置镜像前缀：
 
-### 7. 启动 Python 推理 / 智能体服务
+```bash
+DOCKER_IMAGE_PREFIX=docker.m.daocloud.io/
+MYSQL_IMAGE=docker.m.daocloud.io/mysql:8.0
+```
 
-使用 `uv`：
+说明：
+
+- `DOCKER_IMAGE_PREFIX` 会作用于 `golang / node / nginx / python / alpine` 等构建基础镜像
+- `MYSQL_IMAGE` 单独覆盖数据库镜像
+- 如果你有自己的企业镜像仓库，也可以替换为对应地址
+
+启动：
+
+```bash
+docker compose up -d --build
+```
+
+访问地址：
+
+- 前端：<http://127.0.0.1:3000>
+- 后端健康检查：<http://127.0.0.1:8080/api/v1/health>
+- Python 服务健康检查：<http://127.0.0.1:8001/internal/model/v1/health>
+- 实时演示：<http://127.0.0.1:8090>
+- MySQL：`127.0.0.1:3306`
+
+停止：
+
+```bash
+docker compose down
+```
+
+清理并删除数据卷：
+
+```bash
+docker compose down -v
+```
+
+## CUDA 部署
+
+如果宿主机已安装 `NVIDIA Container Toolkit`，可以叠加 CUDA 覆盖配置：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+```
+
+该模式会为 `models-agent` 申请 `NVIDIA GPU`，推理设备优先级为：
+
+```text
+cuda -> mps -> cpu
+```
+
+## MPS 说明
+
+`models_agent` 代码已经支持 `MPS` 检测与推理，但 `MPS` 属于 macOS 的
+Metal 能力，标准 Linux 容器无法直接透传该能力。因此：
+
+- `Docker` 全栈部署支持 `CPU` 与 `CUDA`
+- `Apple Silicon + MPS` 需要将 `models_agent` 在宿主机本地启动
+- 其余 `db / backend / frontend / live` 仍可继续使用 Docker
+
+宿主机 MPS 启动方式：
 
 ```bash
 cd models_agent
 uv sync
-uv run python main.py
+APP_HOST=0.0.0.0 APP_PORT=8001 uv run python main.py
 ```
 
-使用标准 `pip`：
+随后单独启动其余服务：
 
 ```bash
-cd models_agent
-python -m venv .venv
-source .venv/bin/activate  # Windows 改成 .venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
+PYTHON_SERVICE_BASE_URL=http://host.docker.internal:8001 \
+docker compose up -d db backend frontend live
 ```
 
-默认地址：
+如果这里依然报 `auth.docker.io/token`、`failed to authorize` 或 `EOF`，优先检查 `.env` 中是否已经配置镜像前缀。
 
-- `http://127.0.0.1:8001`
+## LLM 配置
 
-说明：
-
-- 分类接口依赖第 6 步准备好的 TCN checkpoint
-- 预测接口默认走 LSTM checkpoint
-- 如果未配置 LLM，问答接口会自动降级为规则建议
-
-如需自定义 LLM，可修改 [models_agent/configs/agent.yaml](/Users/syn/my/projects/gp/models_agent/configs/agent.yaml) 或设置环境变量：
+如果需要启用节能问答大模型，可在启动前设置环境变量：
 
 - `LLM_BASE_URL`
 - `LLM_API_KEY`
@@ -183,194 +215,67 @@ python main.py
 - `LLM_TEMPERATURE`
 - `LLM_TIMEOUT_SECONDS`
 
-### 8. 启动 Go 后端
+未配置时，智能体接口会自动降级为规则建议，不影响主流程。
 
-先复制环境变量模板：
+## 权重与数据
+
+- `models_agent/checkpoints/`：推理服务默认读取的分类与预测权重
+- `models/data/raw/`：离线训练原始数据目录
+- `models/data/processed/`：离线训练生成的数据集目录
+- `live/data/live_sample.csv`：独立实时演示使用的连续窗口循环样本
+
+仓库当前默认使用：
+
+- 分类权重：`models_agent/checkpoints/classification/tcn/best_model.pt`
+- LSTM 权重：`models_agent/checkpoints/forecast/lstm/best_model.pt`
+- Transformer 权重：`models_agent/checkpoints/forecast/transformer/best_model.pt`
+
+## 本地开发
+
+### 前端
+
+```bash
+cd frontend
+pnpm install
+pnpm dev
+```
+
+### 后端
 
 ```bash
 cd backend
-cp .env.example .env
-```
-
-默认配置已经对齐本地开发链路：
-
-- 后端端口 `8080`
-- MySQL 连接 `root:root@tcp(127.0.0.1:3306)/resident`
-- Python 服务地址 `http://127.0.0.1:8001`
-
-启动：
-
-```bash
 go run ./cmd/api
 ```
 
-### 9. 启动前端
-
-前端开发服务器默认跑在 `3000`，并通过 Vite 代理把 `/api` 转发到 `http://localhost:8080`。
+### Python 推理服务
 
 ```bash
-cd frontend
-pnpm install
-cp .env.example .env.development
-pnpm dev
+cd models_agent
+uv sync
+uv run python main.py
 ```
 
-默认情况下：
-
-- `VITE_USE_MOCK=false`：走真实后端
-- `VITE_USE_MOCK=true`：只走前端 mock 数据
-
-### 10. 验证整条链路
-
-先检查后端和 Python 服务健康状态：
-
-```bash
-curl http://127.0.0.1:8001/internal/model/v1/health
-curl http://127.0.0.1:8001/internal/agent/v1/health
-curl http://127.0.0.1:8080/api/v1/health
-```
-
-再打开前端：
-
-```text
-http://127.0.0.1:3000
-```
-
-推荐的实际使用顺序：
-
-1. 在前端“数据集管理”页面导入一份 CSV
-2. 查看数据集详情和基础统计分析
-3. 触发行为分类
-4. 触发负荷预测或回测
-5. 生成节能建议或进入问答页
-6. 导出报告
-
-## 建模相关常用命令
-
-### 数据预处理
+### 离线训练
 
 ```bash
 cd models
+uv sync
 uv run python data/process/main.py run-all
-```
-
-如果使用 `pip` 环境：
-
-```bash
-cd models
-python data/process/main.py run-all
-```
-
-### TCN 分类
-
-```bash
-cd models
+uv run python data/process/main.py export-live-sample
 uv run python classification/TCN/main.py train
-uv run python classification/TCN/main.py test
-uv run python classification/TCN/main.py predict --input data/processed/classification/classification_day_features.csv
-```
-
-如果使用 `pip` 环境：
-
-```bash
-cd models
-python classification/TCN/main.py train
-python classification/TCN/main.py test
-python classification/TCN/main.py predict --input data/processed/classification/classification_day_features.csv
-```
-
-### LSTM 预测
-
-```bash
-cd models
 uv run python forecast/LSTM/main.py train
-uv run python forecast/LSTM/main.py test
+uv run python forecast/transformer/main.py train
 ```
 
-如果使用 `pip` 环境：
+### 实时演示模块
 
 ```bash
-cd models
-python forecast/LSTM/main.py train
-python forecast/LSTM/main.py test
+cd live
+go run ./cmd/server
 ```
 
-### Transformer 预测
+说明：
 
-```bash
-cd models
-uv run python forecast/GPT/main.py train
-uv run python forecast/GPT/main.py test
-```
-
-如果使用 `pip` 环境：
-
-```bash
-cd models
-python forecast/GPT/main.py train
-python forecast/GPT/main.py test
-```
-
-## 前后端开发说明
-
-### 后端接口前缀
-
-主服务统一走：
-
-```text
-/api/v1
-```
-
-例如：
-
-- `GET /api/v1/health`
-- `POST /api/v1/datasets/import`
-- `POST /api/v1/datasets/:id/classifications/predict`
-- `POST /api/v1/datasets/:id/forecasts/predict`
-- `POST /api/v1/agent/ask`
-
-### Python 服务接口
-
-`models_agent` 提供：
-
-- `GET /internal/model/v1/health`
-- `GET /internal/model/v1/model/info`
-- `POST /internal/model/v1/predict`
-- `POST /internal/model/v1/forecast`
-- `POST /internal/model/v1/backtest`
-- `GET /internal/agent/v1/health`
-- `POST /internal/agent/v1/ask`
-
-## 文档入口
-
-- 需求与系统设计：[doc/chinese_project.md](/Users/syn/my/projects/gp/doc/chinese_project.md)
-- 模型数据流水线：[doc/model_data_pipeline.md](/Users/syn/my/projects/gp/doc/model_data_pipeline.md)
-- 数据库结构：[doc/schema.sql](/Users/syn/my/projects/gp/doc/schema.sql)
-
-## 常见问题
-
-### 1. 没有 GPU 能跑吗？
-
-可以。训练和推理会自动在 `cuda -> mps -> cpu` 中选择可用设备。
-
-### 2. 如果我只想先看前端页面？
-
-可以直接在 `frontend/.env.development` 里把 `VITE_USE_MOCK=true`，然后执行：
-
-```bash
-cd frontend
-pnpm install
-pnpm dev
-```
-
-### 3. 为什么前端起了但接口报错？
-
-优先检查这三项：
-
-- `models_agent` 是否在 `8001` 端口正常启动
-- `backend/.env` 中的 `APP_PORT` 是否为 `8080`
-- MySQL 是否已启动且 `resident` 数据库建表成功
-
-## 许可证
-
-本项目采用 [MIT License](LICENSE)。
+- 默认读取 `live/data/live_sample.csv`
+- 每 `1s` 推进一个虚拟 `15min` 点
+- 页面会实时刷新今日负荷、上一完整日分类、下一日预测与问答结果

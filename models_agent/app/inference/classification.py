@@ -53,7 +53,14 @@ class ClassificationExperimentConfig:
 
 
 def detect_device() -> str:
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+
+    mps_backend = getattr(torch.backends, "mps", None)
+    if mps_backend is not None and mps_backend.is_available():
+        return "mps"
+
+    return "cpu"
 
 
 def _resolve_path(path_value: str | None, base_dir: Path) -> Path | None:

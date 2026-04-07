@@ -41,16 +41,3 @@ type ForecastDetail struct {
 	Forecast map[string]any        `json:"forecast"`
 	Series   []ForecastSeriesPoint `json:"series"`
 }
-
-type BacktestMetrics struct {
-	MAE   float64 `json:"mae"`
-	RMSE  float64 `json:"rmse"`
-	SMAPE float64 `json:"smape"`
-	WAPE  float64 `json:"wape"`
-}
-
-type BacktestPredictionPoint struct {
-	Timestamp time.Time `json:"timestamp"`
-	Actual    float64   `json:"actual"`
-	Predicted float64   `json:"predicted"`
-}

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>实时用电演示</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/echarts@6/dist/echarts.min.js"></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <div class="grain"></div>
+      <header class="hero">
+        <div>
+          <p class="eyebrow">实时演示 / LIVE</p>
+          <h1>本地虚拟住户实时用电界面</h1>
+          <p class="hero-copy">
+            每 1 秒推进 1 个虚拟 15 分钟点，自动刷新今日负荷、上一日分类与下一日预测。
+          </p>
+        </div>
+        <aside class="hero-panel">
+          <div class="status-row">
+            <span class="status-dot"></span>
+            <span id="status-text">正在连接实时流…</span>
+          </div>
+          <div class="hero-metrics">
+            <div>
+              <span>虚拟时间</span>
+              <strong id="virtual-time">--</strong>
+            </div>
+            <div>
+              <span>循环轮次</span>
+              <strong id="week-loop">0</strong>
+            </div>
+            <div>
+              <span>家庭标识</span>
+              <strong id="house-id">--</strong>
+            </div>
+          </div>
+        </aside>
+      </header>
+
+      <main class="dashboard-grid">
+        <section class="card accent-card">
+          <div class="card-title-row">
+            <h2>今日实时负荷</h2>
+            <span id="today-progress" class="pill">0%</span>
+          </div>
+          <div id="trend-chart" class="chart-panel"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-title-row">
+            <h2>实时指标</h2>
+            <span class="card-caption">自动滚动更新</span>
+          </div>
+          <div class="metric-grid">
+            <article>
+              <span>当前功率</span>
+              <strong id="metric-current">--</strong>
+            </article>
+            <article>
+              <span>今日累计</span>
+              <strong id="metric-kwh">--</strong>
+            </article>
+            <article>
+              <span>今日峰值</span>
+              <strong id="metric-peak">--</strong>
+            </article>
+            <article>
+              <span>今日基线</span>
+              <strong id="metric-base">--</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-title-row">
+            <h2>最近完整日分类</h2>
+            <span id="classification-date" class="card-caption">--</span>
+          </div>
+          <div class="tag-stack">
+            <span id="classification-label" class="label-tag">--</span>
+            <span id="classification-model" class="soft-tag">模型 --</span>
+          </div>
+          <p id="classification-explanation" class="body-copy"></p>
+        </section>
+
+        <section class="card">
+          <div class="card-title-row">
+            <h2>下一日预测</h2>
+            <span id="forecast-date" class="card-caption">--</span>
+          </div>
+          <div class="tag-stack">
+            <span id="forecast-model" class="soft-tag">模型 --</span>
+          </div>
+          <div class="forecast-metrics">
+            <article>
+              <span>预测均值</span>
+              <strong id="forecast-avg">--</strong>
+            </article>
+            <article>
+              <span>预测峰值</span>
+              <strong id="forecast-peak">--</strong>
+            </article>
+          </div>
+          <p id="forecast-explanation" class="body-copy"></p>
+          <div id="forecast-risks" class="tag-stack"></div>
+        </section>
+
+        <section class="card chat-card">
+          <div class="card-title-row">
+            <h2>直接提问</h2>
+            <span class="card-caption">通过 LangChain 问答接口生成</span>
+          </div>
+          <form id="chat-form" class="chat-form">
+            <textarea
+              id="chat-input"
+              rows="4"
+              placeholder="例如：现在是什么用电类型？明天的峰值大概几点？"
+            ></textarea>
+            <button type="submit">询问当前实时态势</button>
+          </form>
+          <div id="chat-answer" class="chat-answer">
+            这里会根据当前虚拟住户的实时状态自动生成回答。
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

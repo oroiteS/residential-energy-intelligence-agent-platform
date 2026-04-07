@@ -78,23 +78,3 @@ func (h *ForecastHandler) Get(c *gin.Context) {
 	}
 	response.OK(c, data)
 }
-
-func (h *ForecastHandler) Backtest(c *gin.Context) {
-	id, ok := parseUint64Param(c, "id")
-	if !ok {
-		return
-	}
-
-	var payload service.ForecastBacktestInput
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		response.Error(c, apperror.InvalidRequest("请求体格式错误", map[string]any{"error": err.Error()}))
-		return
-	}
-
-	data, appErr := h.service.Backtest(c.Request.Context(), id, payload)
-	if appErr != nil {
-		response.Error(c, appErr)
-		return
-	}
-	response.OK(c, data)
-}

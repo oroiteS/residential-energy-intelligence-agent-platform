@@ -13,7 +13,6 @@ type Dependencies struct {
 	Logger                *zap.Logger
 	HealthHandler         *handler.HealthHandler
 	SystemConfigHandler   *handler.SystemConfigHandler
-	LLMConfigHandler      *handler.LLMConfigHandler
 	DatasetHandler        *handler.DatasetHandler
 	ChatHandler           *handler.ChatHandler
 	AnalysisHandler       *handler.AnalysisHandler
@@ -35,11 +34,6 @@ func New(dep Dependencies) *gin.Engine {
 		api.GET("/health", dep.HealthHandler.Get)
 		api.GET("/system/config", dep.SystemConfigHandler.Get)
 		api.PATCH("/system/config", dep.SystemConfigHandler.Patch)
-		api.GET("/llm-configs", dep.LLMConfigHandler.List)
-		api.POST("/llm-configs", dep.LLMConfigHandler.Create)
-		api.PUT("/llm-configs/:id", dep.LLMConfigHandler.Update)
-		api.DELETE("/llm-configs/:id", dep.LLMConfigHandler.Delete)
-		api.POST("/llm-configs/:id/set-default", dep.LLMConfigHandler.SetDefault)
 		api.POST("/datasets/import", dep.DatasetHandler.Import)
 		api.POST("/chat/sessions", dep.ChatHandler.CreateSession)
 		api.GET("/chat/sessions", dep.ChatHandler.ListSessions)
@@ -56,7 +50,6 @@ func New(dep Dependencies) *gin.Engine {
 		api.POST("/datasets/:id/forecasts/predict", dep.ForecastHandler.Predict)
 		api.GET("/datasets/:id/forecasts", dep.ForecastHandler.List)
 		api.GET("/forecasts/:forecast_id", dep.ForecastHandler.Get)
-		api.POST("/datasets/:id/forecasts/backtest", dep.ForecastHandler.Backtest)
 		api.POST("/agent/ask", dep.AgentHandler.Ask)
 		api.GET("/datasets/:id/advices", dep.AdviceHandler.List)
 		api.POST("/datasets/:id/advices/generate", dep.AdviceHandler.Generate)

@@ -41,6 +41,15 @@ type AgentAskInput struct {
 	History   []agentclient.HistoryItem `json:"history"`
 }
 
+type ReportSummary struct {
+	Title           string
+	Overview        string
+	Sections        []agentclient.ReportSection
+	Recommendations []string
+	Degraded        bool
+	ErrorReason     *string
+}
+
 func NewAgentService(
 	cfg *config.AppConfig,
 	datasetRepo repository.DatasetRepository,
@@ -173,6 +182,57 @@ func (s *AgentService) askAgent(ctx context.Context, input AgentAskInput, contex
 		SessionID: input.SessionID,
 		Question:  input.Question,
 		History:   input.History,
+		Context:   contextPayload,
+	})
+}
+
+func (s *AgentService) GenerateReportSummary(
+	ctx context.Context,
+	dataset *domain.DatasetRecord,
+	analysisRecord *domain.AnalysisResultRecord,
+) (*ReportSummary, *apperror.AppError) {
+	if dataset == nil {
+		return nil, apperror.InvalidRequest("dataset 不能为空", nil)
+	}
+	if analysisRecord == nil {
+		return nil, apperror.InvalidRequest("analysisRecord 不能为空", nil)
+	}
+
+	runtimeConfig, err := s.systemConfigService.Get(ctx)
+	if err != nil {
+		return nil, apperror.Internal(err)
+	}
+
+	contextPayload, appErr := s.buildAgentContext(ctx, dataset, analysisRecord, runtimeConfig)
+	if appErr != nil {
+		return nil, appErr
+	}
+
+	result, err := s.summarizeReport(ctx, dataset.ID, contextPayload)
+	if err != nil {
+		s.logWarn("报告摘要智能体调用失败，已回退本地生成", zap.Error(err), zap.Uint64("dataset_id", dataset.ID))
+		fallback := buildLocalReportSummary(dataset, contextPayload, "AGENT_SERVICE_UNAVAILABLE")
+		return &fallback, nil
+	}
+
+	normalized := normalizeReportSummaryResponse(dataset, result)
+	if normalized.Overview == "" {
+		fallback := buildLocalReportSummary(dataset, contextPayload, "EMPTY_REPORT_SUMMARY")
+		return &fallback, nil
+	}
+	return &normalized, nil
+}
+
+func (s *AgentService) summarizeReport(
+	ctx context.Context,
+	datasetID uint64,
+	contextPayload map[string]any,
+) (*agentclient.ReportSummaryResponse, error) {
+	if s.agentClient == nil {
+		return nil, errors.New("智能体客户端未初始化")
+	}
+	return s.agentClient.SummarizeReport(ctx, agentclient.ReportSummaryRequest{
+		DatasetID: datasetID,
 		Context:   contextPayload,
 	})
 }
@@ -631,6 +691,197 @@ func buildLocalFallbackActions(contextPayload map[string]any) []string {
 		return actions[:5]
 	}
 	return actions
+}
+
+func buildLocalReportSummary(
+	dataset *domain.DatasetRecord,
+	contextPayload map[string]any,
+	reason string,
+) ReportSummary {
+	analysisSummary, _ := contextPayload["analysis_summary"].(map[string]any)
+	classificationResult, _ := contextPayload["classification_result"].(map[string]any)
+	forecastSummary, _ := contextPayload["forecast_summary"].(map[string]any)
+	historySummary, _ := contextPayload["recent_history_summary"].(map[string]any)
+
+	title := "居民用电分析报告"
+	if name := strings.TrimSpace(dataset.Name); name != "" {
+		title = title + " - " + name
+	}
+
+	overviewParts := make([]string, 0, 4)
+	if value, ok := floatValue(analysisSummary["daily_avg_kwh"]); ok {
+		overviewParts = append(overviewParts, fmt.Sprintf("日均用电量约 %.2f kWh", value))
+	}
+	if value, ok := floatValue(analysisSummary["peak_ratio"]); ok {
+		overviewParts = append(overviewParts, fmt.Sprintf("峰时占比 %.2f%%", value*100))
+	}
+	if label := classificationLabelText(stringValue(classificationResult["predicted_label"])); label != "" {
+		overviewParts = append(overviewParts, "行为类型判断为"+label)
+	}
+	if peakPeriod := stringValue(forecastSummary["peak_period"]); peakPeriod != "" {
+		overviewParts = append(overviewParts, "预测高负荷时段集中在"+peakPeriod)
+	}
+	if len(overviewParts) == 0 {
+		overviewParts = append(overviewParts, "当前智能体已降级，报告摘要基于已有分析结果自动整理。")
+	}
+	overviewText := strings.Join(overviewParts, "，") + "。"
+
+	behaviorParts := make([]string, 0, 4)
+	if label := classificationLabelText(stringValue(classificationResult["predicted_label"])); label != "" {
+		behaviorParts = append(behaviorParts, "当前家庭用电行为被识别为"+label)
+	}
+	if value, ok := floatValue(classificationResult["confidence"]); ok {
+		behaviorParts = append(behaviorParts, fmt.Sprintf("分类置信度约 %.2f%%", value*100))
+	}
+	if value, ok := floatValue(historySummary["avg_active_appliance_count"]); ok {
+		behaviorParts = append(behaviorParts, fmt.Sprintf("最近窗口内平均活跃电器数量约 %.2f 个", value))
+	}
+	if value, ok := floatValue(historySummary["avg_burst_event_count"]); ok {
+		behaviorParts = append(behaviorParts, fmt.Sprintf("平均突发事件数约 %.2f", value))
+	}
+	behaviorText := "当前缺少明确的行为分类结果，建议结合历史曲线进一步确认用电模式。"
+	if len(behaviorParts) > 0 {
+		behaviorText = strings.Join(behaviorParts, "，") + "。"
+	}
+
+	riskParts := make([]string, 0, 5)
+	if peakPeriod := stringValue(forecastSummary["peak_period"]); peakPeriod != "" {
+		riskParts = append(riskParts, "预测高负荷时段集中在"+peakPeriod)
+	}
+	if value, ok := floatValue(forecastSummary["predicted_avg_load_w"]); ok {
+		riskParts = append(riskParts, fmt.Sprintf("预测平均负荷约 %.2f W", value))
+	}
+	if value, ok := floatValue(forecastSummary["predicted_peak_load_w"]); ok {
+		riskParts = append(riskParts, fmt.Sprintf("预测峰值负荷约 %.2f W", value))
+	}
+	if riskFlags := stringValue(forecastSummary["risk_flags"]); riskFlags != "" {
+		riskParts = append(riskParts, "风险标签："+riskFlags)
+	}
+	if value, ok := floatValue(historySummary["max_load_w"]); ok {
+		riskParts = append(riskParts, fmt.Sprintf("历史窗口内最高负荷约 %.2f W", value))
+	}
+	riskText := "当前缺少预测结果，暂无法给出稳定的风险判断。"
+	if len(riskParts) > 0 {
+		riskText = strings.Join(riskParts, "，") + "。"
+	}
+
+	recommendations := buildLocalFallbackActions(contextPayload)
+	if len(recommendations) == 0 {
+		recommendations = []string{"建议优先复核峰时段负荷和夜间持续运行设备。"}
+	}
+	noteParts := []string{
+		"本报告依据统计分析、行为分类、负荷预测与规则建议自动生成",
+		"适合作为阶段性分析与归档材料",
+	}
+	if degradedNote := reportSummaryDegradedNote(reason); degradedNote != "" {
+		noteParts = append(noteParts, degradedNote)
+	}
+	noteText := strings.Join(noteParts, "，") + "。"
+
+	return ReportSummary{
+		Title:    title,
+		Overview: overviewText,
+		Sections: orderedReportSections(map[string]string{
+			"总体概览": overviewText,
+			"行为判断": behaviorText,
+			"预测风险": riskText,
+			"附注":   noteText,
+		}),
+		Recommendations: recommendations,
+		Degraded:        true,
+		ErrorReason:     stringPtr(reason),
+	}
+}
+
+func normalizeReportSummaryResponse(dataset *domain.DatasetRecord, response *agentclient.ReportSummaryResponse) ReportSummary {
+	if response == nil {
+		return buildLocalReportSummary(dataset, map[string]any{}, "EMPTY_REPORT_SUMMARY")
+	}
+
+	title := strings.TrimSpace(response.Title)
+	if title == "" {
+		title = "居民用电分析报告"
+		if dataset != nil && strings.TrimSpace(dataset.Name) != "" {
+			title = title + " - " + strings.TrimSpace(dataset.Name)
+		}
+	}
+
+	fallback := buildLocalReportSummary(dataset, map[string]any{}, "EMPTY_REPORT_SUMMARY")
+	overview := strings.TrimSpace(response.Overview)
+	if overview == "" {
+		overview = fallback.Overview
+	}
+
+	sectionValues := make(map[string]string, len(fallback.Sections))
+	for _, section := range fallback.Sections {
+		sectionValues[section.Title] = section.Body
+	}
+	for _, section := range response.Sections {
+		titleValue := strings.TrimSpace(section.Title)
+		bodyValue := strings.TrimSpace(section.Body)
+		if titleValue == "" || bodyValue == "" {
+			continue
+		}
+		switch titleValue {
+		case "总体概览", "行为判断", "预测风险", "附注":
+			sectionValues[titleValue] = bodyValue
+		}
+	}
+	sectionValues["总体概览"] = overview
+	if response.Degraded {
+		sectionValues["附注"] = reportSummaryDegradedSection(response.ErrorReason)
+	}
+	sections := orderedReportSections(sectionValues)
+
+	recommendations := make([]string, 0, max(len(response.Recommendations), len(fallback.Recommendations)))
+	for _, item := range response.Recommendations {
+		value := strings.TrimSpace(item)
+		if value != "" && !containsString(recommendations, value) {
+			recommendations = append(recommendations, value)
+		}
+	}
+	if len(recommendations) == 0 {
+		recommendations = append(recommendations, fallback.Recommendations...)
+	}
+
+	return ReportSummary{
+		Title:           title,
+		Overview:        overview,
+		Sections:        sections,
+		Recommendations: recommendations,
+		Degraded:        response.Degraded,
+		ErrorReason:     response.ErrorReason,
+	}
+}
+
+func reportSummaryDegradedNote(reason string) string {
+	if strings.TrimSpace(reason) == "" {
+		return ""
+	}
+	return "摘要由系统基于现有分析结果自动整理"
+}
+
+func reportSummaryDegradedSection(reason *string) string {
+	if reason == nil || strings.TrimSpace(*reason) == "" {
+		return "本报告摘要由系统基于现有分析结果自动整理，可正常用于导出与归档。"
+	}
+	return "本报告摘要由系统基于现有分析结果自动整理，当前未启用增强总结能力，可正常用于导出与归档。"
+}
+
+func orderedReportSections(values map[string]string) []agentclient.ReportSection {
+	order := []string{"总体概览", "行为判断", "预测风险", "附注"}
+	sections := make([]agentclient.ReportSection, 0, len(order))
+	for _, title := range order {
+		body := strings.TrimSpace(values[title])
+		if body == "" {
+			continue
+		}
+		sections = append(sections, agentclient.ReportSection{
+			Title: title,
+			Body:  body,
+		})
+	}
+	return sections
 }
 
 func classificationLabelText(label string) string {

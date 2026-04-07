@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -71,50 +71,17 @@ type ForecastResponse struct {
 	Predictions []float64 `json:"predictions"`
 }
 
-type BacktestRequest struct {
-	ModelType     string            `json:"model_type"`
-	DatasetID     uint64            `json:"dataset_id"`
-	BacktestStart string            `json:"backtest_start"`
-	BacktestEnd   string            `json:"backtest_end"`
-	Granularity   string            `json:"granularity"`
-	Series        []TimeSeriesPoint `json:"series"`
-	Metadata      Metadata          `json:"metadata"`
-}
-
-type BacktestPoint struct {
-	Timestamp string  `json:"timestamp"`
-	Actual    float64 `json:"actual"`
-	Predicted float64 `json:"predicted"`
-}
-
-type BacktestMetrics struct {
-	MAE   float64 `json:"mae"`
-	RMSE  float64 `json:"rmse"`
-	SMAPE float64 `json:"smape"`
-	WAPE  float64 `json:"wape"`
-}
-
-type BacktestResponse struct {
-	ModelType     string          `json:"model_type"`
-	BacktestStart string          `json:"backtest_start"`
-	BacktestEnd   string          `json:"backtest_end"`
-	Granularity   string          `json:"granularity"`
-	Predictions   []BacktestPoint `json:"predictions"`
-	Metrics       BacktestMetrics `json:"metrics"`
-}
-
 type Client interface {
 	Health(ctx context.Context) error
 	PredictClassification(ctx context.Context, request PredictClassificationRequest) (*PredictClassificationResponse, error)
 	Forecast(ctx context.Context, request ForecastRequest) (*ForecastResponse, error)
-	Backtest(ctx context.Context, request BacktestRequest) (*BacktestResponse, error)
 }
 
 type StubClient struct{}
 
 type HTTPClient struct {
-	baseURL string
-	client  *http.Client
+	baseURLs []string
+	client   *http.Client
 }
 
 func NewStubClient() Client {
@@ -123,7 +90,7 @@ func NewStubClient() Client {
 
 func NewHTTPClient(baseURL string, timeout time.Duration) Client {
 	return &HTTPClient{
-		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		baseURLs: buildCandidateBaseURLs(baseURL),
 		client: &http.Client{
 			Timeout: timeout,
 		},
@@ -233,90 +200,30 @@ func (c *StubClient) Forecast(_ context.Context, request ForecastRequest) (*Fore
 	}, nil
 }
 
-func (c *StubClient) Backtest(_ context.Context, request BacktestRequest) (*BacktestResponse, error) {
-	start, err := time.Parse(time.RFC3339, request.BacktestStart)
-	if err != nil {
-		return nil, err
-	}
-	end, err := time.Parse(time.RFC3339, request.BacktestEnd)
-	if err != nil {
-		return nil, err
-	}
-
-	actualPoints := make([]TimeSeriesPoint, 0, 96)
-	historyPoints := make([]TimeSeriesPoint, 0, len(request.Series))
-	for _, point := range request.Series {
-		ts, parseErr := time.Parse(time.RFC3339, point.Timestamp)
-		if parseErr != nil {
-			continue
-		}
-		if !ts.Before(start) && !ts.After(end) {
-			actualPoints = append(actualPoints, point)
-			continue
-		}
-		if ts.Before(start) {
-			historyPoints = append(historyPoints, point)
-		}
-	}
-	if len(actualPoints) == 0 {
-		return nil, fmt.Errorf("回测缺少实际值区间")
-	}
-
-	forecastResp, err := c.Forecast(context.Background(), ForecastRequest{
-		ModelType:     request.ModelType,
-		DatasetID:     request.DatasetID,
-		ForecastStart: request.BacktestStart,
-		ForecastEnd:   request.BacktestEnd,
-		Granularity:   request.Granularity,
-		Series:        historyPoints,
-		Metadata:      request.Metadata,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	points := make([]BacktestPoint, 0, len(actualPoints))
-	actualValues := make([]float64, 0, len(actualPoints))
-	predictedValues := make([]float64, 0, len(actualPoints))
-	for index, actual := range actualPoints {
-		predicted := actual.Aggregate
-		if index < len(forecastResp.Predictions) {
-			predicted = forecastResp.Predictions[index]
-		}
-		points = append(points, BacktestPoint{
-			Timestamp: actual.Timestamp,
-			Actual:    actual.Aggregate,
-			Predicted: predicted,
-		})
-		actualValues = append(actualValues, actual.Aggregate)
-		predictedValues = append(predictedValues, predicted)
-	}
-
-	return &BacktestResponse{
-		ModelType:     request.ModelType,
-		BacktestStart: request.BacktestStart,
-		BacktestEnd:   request.BacktestEnd,
-		Granularity:   request.Granularity,
-		Predictions:   points,
-		Metrics:       computeBacktestMetrics(actualValues, predictedValues),
-	}, nil
-}
-
 func (c *HTTPClient) Health(ctx context.Context) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/internal/model/v1/health", nil)
-	if err != nil {
-		return err
+	var lastErr error
+	for _, baseURL := range c.baseURLs {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/internal/model/v1/health", nil)
+		if err != nil {
+			return err
+		}
+		response, err := c.client.Do(request)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if response.StatusCode >= 300 {
+			body, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+			_ = response.Body.Close()
+			return fmt.Errorf("模型服务健康检查失败: status=%d body=%s", response.StatusCode, strings.TrimSpace(string(body)))
+		}
+		_ = response.Body.Close()
+		return nil
 	}
-	response, err := c.client.Do(request)
-	if err != nil {
-		return err
+	if lastErr != nil {
+		return lastErr
 	}
-	defer response.Body.Close()
-	if response.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		return fmt.Errorf("模型服务健康检查失败: status=%d body=%s", response.StatusCode, strings.TrimSpace(string(body)))
-	}
-	return nil
+	return fmt.Errorf("模型服务基础地址未配置")
 }
 
 func (c *HTTPClient) PredictClassification(ctx context.Context, request PredictClassificationRequest) (*PredictClassificationResponse, error) {
@@ -335,36 +242,71 @@ func (c *HTTPClient) Forecast(ctx context.Context, request ForecastRequest) (*Fo
 	return &result, nil
 }
 
-func (c *HTTPClient) Backtest(ctx context.Context, request BacktestRequest) (*BacktestResponse, error) {
-	var result BacktestResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/internal/model/v1/backtest", request, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
 func (c *HTTPClient) doJSON(ctx context.Context, method, path string, payload any, target any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
 
-	response, err := c.client.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
+	var lastErr error
+	for _, baseURL := range c.baseURLs {
+		request, requestErr := http.NewRequestWithContext(ctx, method, baseURL+path, bytes.NewReader(body))
+		if requestErr != nil {
+			return requestErr
+		}
+		request.Header.Set("Content-Type", "application/json")
 
-	if response.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return fmt.Errorf("模型服务请求失败: status=%d body=%s", response.StatusCode, strings.TrimSpace(string(raw)))
+		response, requestErr := c.client.Do(request)
+		if requestErr != nil {
+			lastErr = requestErr
+			continue
+		}
+
+		if response.StatusCode >= 300 {
+			raw, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+			_ = response.Body.Close()
+			return fmt.Errorf("模型服务请求失败: status=%d body=%s", response.StatusCode, strings.TrimSpace(string(raw)))
+		}
+		decodeErr := json.NewDecoder(response.Body).Decode(target)
+		_ = response.Body.Close()
+		return decodeErr
 	}
-	return json.NewDecoder(response.Body).Decode(target)
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("模型服务基础地址未配置")
+}
+
+func buildCandidateBaseURLs(baseURL string) []string {
+	normalized := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if normalized == "" {
+		return nil
+	}
+
+	candidates := []string{normalized}
+	for _, host := range []string{"models-agent", "host.docker.internal"} {
+		if fallback := replaceBaseURLHost(normalized, host, "127.0.0.1"); fallback != "" && fallback != normalized {
+			candidates = append(candidates, fallback)
+		}
+	}
+	return candidates
+}
+
+func replaceBaseURLHost(baseURL string, fromHost string, toHost string) string {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+	if !strings.EqualFold(parsed.Hostname(), fromHost) {
+		return ""
+	}
+	port := parsed.Port()
+	if port == "" {
+		parsed.Host = toHost
+	} else {
+		parsed.Host = toHost + ":" + port
+	}
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 func safeMean(total float64, count int) float64 {
@@ -372,42 +314,4 @@ func safeMean(total float64, count int) float64 {
 		return 0
 	}
 	return total / float64(count)
-}
-
-func computeBacktestMetrics(actualValues, predictedValues []float64) BacktestMetrics {
-	if len(actualValues) == 0 || len(actualValues) != len(predictedValues) {
-		return BacktestMetrics{}
-	}
-
-	absErrorSum := 0.0
-	squaredErrorSum := 0.0
-	smapeSum := 0.0
-	actualAbsSum := 0.0
-
-	for index, actual := range actualValues {
-		predicted := predictedValues[index]
-		errValue := predicted - actual
-		absError := math.Abs(errValue)
-		absErrorSum += absError
-		squaredErrorSum += errValue * errValue
-		actualAbsSum += math.Abs(actual)
-
-		denominator := math.Abs(actual) + math.Abs(predicted)
-		if denominator > 1e-6 {
-			smapeSum += (2 * absError) / denominator
-		}
-	}
-
-	count := float64(len(actualValues))
-	wape := 0.0
-	if actualAbsSum > 1e-6 {
-		wape = absErrorSum / actualAbsSum * 100
-	}
-
-	return BacktestMetrics{
-		MAE:   absErrorSum / count,
-		RMSE:  math.Sqrt(squaredErrorSum / count),
-		SMAPE: smapeSum / count * 100,
-		WAPE:  wape,
-	}
 }

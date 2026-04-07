@@ -45,13 +45,6 @@ type ForecastListParams struct {
 	ModelType string
 }
 
-type ForecastBacktestInput struct {
-	ModelType     string    `json:"model_type"`
-	Granularity   string    `json:"granularity"`
-	BacktestStart time.Time `json:"backtest_start"`
-	BacktestEnd   time.Time `json:"backtest_end"`
-}
-
 func NewForecastService(
 	cfg *config.AppConfig,
 	datasetRepo repository.DatasetRepository,
@@ -90,18 +83,20 @@ func (s *ForecastService) Predict(ctx context.Context, datasetID uint64, input F
 	if appErr != nil {
 		return nil, appErr
 	}
+	if dataset.TimeEnd == nil {
+		return nil, apperror.Conflict("DATASET_NOT_READY", "数据集缺少完整时间范围，暂无法预测未来负荷", map[string]any{"id": datasetID})
+	}
 	rows, err := readProcessedFeatureRows(*dataset.ProcessedFilePath)
 	if err != nil {
 		return nil, apperror.Internal(err)
+	}
+	if _, appErr := validateFutureForecastWindow(*dataset.TimeEnd, input.ForecastStart, input.ForecastEnd); appErr != nil {
+		return nil, appErr
 	}
 
 	runtimeConfig, err := s.systemConfigService.Get(ctx)
 	if err != nil {
 		return nil, apperror.Internal(err)
-	}
-	historyRows, appErr := selectForecastHistoryRows(rows, input.ForecastStart, runtimeConfig.ModelHistoryWindowConfig.ForecastHistoryDays)
-	if appErr != nil {
-		return nil, appErr
 	}
 
 	if !input.ForceRefresh {
@@ -112,28 +107,19 @@ func (s *ForecastService) Predict(ctx context.Context, datasetID uint64, input F
 		}
 	}
 
-	response, err := s.modelClient.Forecast(ctx, modelclient.ForecastRequest{
-		ModelType:     modelType,
-		DatasetID:     datasetID,
-		ForecastStart: input.ForecastStart.Format(time.RFC3339),
-		ForecastEnd:   input.ForecastEnd.Format(time.RFC3339),
-		Granularity:   granularity,
-		Series:        buildModelSeries(historyRows),
-		Metadata:      modelclient.Metadata{Granularity: granularity, Unit: "w"},
-	})
-	if err != nil {
-		return nil, apperror.ServiceUnavailable("MODEL_SERVICE_UNAVAILABLE", "预测模型服务调用失败", map[string]any{"error": err.Error()})
+	series, appErr := s.generateForecastSeries(
+		ctx,
+		datasetID,
+		modelType,
+		granularity,
+		input.ForecastStart,
+		input.ForecastEnd,
+		rows,
+		runtimeConfig.ModelHistoryWindowConfig.ForecastHistoryDays,
+	)
+	if appErr != nil {
+		return nil, appErr
 	}
-
-	expectedPoints := expected15MinutePoints(input.ForecastStart, input.ForecastEnd)
-	if len(response.Predictions) != expectedPoints {
-		return nil, apperror.ServiceUnavailable("MODEL_SERVICE_INVALID_RESPONSE", "模型返回的预测点数量不正确", map[string]any{
-			"expected_points": expectedPoints,
-			"actual_points":   len(response.Predictions),
-		})
-	}
-
-	series := buildForecastSeries(input.ForecastStart, response.Predictions)
 	summary := buildForecastSummary(input.ForecastStart, input.ForecastEnd, granularity, series, runtimeConfig.PeakValleyConfig)
 	summaryJSON, err := json.Marshal(summary)
 	if err != nil {
@@ -164,6 +150,74 @@ func (s *ForecastService) Predict(ctx context.Context, datasetID uint64, input F
 
 	s.logInfo("时序预测完成", zap.Uint64("dataset_id", datasetID), zap.String("model_type", modelType))
 	return map[string]any{"forecast": forecastRecordDTO(record)}, nil
+}
+
+func (s *ForecastService) generateForecastSeries(
+	ctx context.Context,
+	datasetID uint64,
+	modelType string,
+	granularity string,
+	forecastStart time.Time,
+	forecastEnd time.Time,
+	actualRows []processedFeatureRow,
+	historyDays int,
+) ([]domain.ForecastSeriesPoint, *apperror.AppError) {
+	if len(actualRows) == 0 {
+		return nil, apperror.Unprocessable("INSUFFICIENT_HISTORY", "数据集中缺少可用于预测的时序数据", nil)
+	}
+
+	predictedRows := make([]processedFeatureRow, 0, 96*3)
+	slotTemplates := buildLatestSlotTemplates(actualRows)
+	currentStart := normalizeDayStart(actualRows[len(actualRows)-1].Timestamp).AddDate(0, 0, 1)
+	var targetSeries []domain.ForecastSeriesPoint
+
+	for !currentStart.After(forecastStart) {
+		currentEnd := currentStart.Add(95 * 15 * time.Minute)
+		historyRows, appErr := selectForecastHistoryRowsFromSources(
+			actualRows,
+			predictedRows,
+			currentStart,
+			historyDays,
+		)
+		if appErr != nil {
+			return nil, appErr
+		}
+
+		response, err := s.modelClient.Forecast(ctx, modelclient.ForecastRequest{
+			ModelType:     modelType,
+			DatasetID:     datasetID,
+			ForecastStart: currentStart.Format(time.RFC3339),
+			ForecastEnd:   currentEnd.Format(time.RFC3339),
+			Granularity:   granularity,
+			Series:        buildModelSeries(historyRows),
+			Metadata:      modelclient.Metadata{Granularity: granularity, Unit: "w"},
+		})
+		if err != nil {
+			return nil, apperror.ServiceUnavailable("MODEL_SERVICE_UNAVAILABLE", "预测模型服务调用失败", map[string]any{"error": err.Error()})
+		}
+
+		expectedPoints := expected15MinutePoints(currentStart, currentEnd)
+		if len(response.Predictions) != expectedPoints {
+			return nil, apperror.ServiceUnavailable("MODEL_SERVICE_INVALID_RESPONSE", "模型返回的预测点数量不正确", map[string]any{
+				"expected_points": expectedPoints,
+				"actual_points":   len(response.Predictions),
+			})
+		}
+
+		currentSeries := buildForecastSeries(currentStart, response.Predictions)
+		predictedRows = append(predictedRows, buildPredictedHistoryRows(currentSeries, slotTemplates)...)
+		if currentStart.Equal(forecastStart) {
+			targetSeries = currentSeries
+		}
+		currentStart = currentStart.AddDate(0, 0, 1)
+	}
+
+	if len(targetSeries) == 0 {
+		return nil, apperror.ServiceUnavailable("MODEL_SERVICE_INVALID_RESPONSE", "未生成目标日期的预测结果", map[string]any{
+			"forecast_start": forecastStart,
+		})
+	}
+	return targetSeries, nil
 }
 
 func (s *ForecastService) List(ctx context.Context, datasetID uint64, params ForecastListParams) (map[string]any, *apperror.AppError) {
@@ -232,89 +286,6 @@ func (s *ForecastService) Get(ctx context.Context, forecastID uint64) (map[strin
 	}, nil
 }
 
-func (s *ForecastService) Backtest(ctx context.Context, datasetID uint64, input ForecastBacktestInput) (map[string]any, *apperror.AppError) {
-	if s.datasetRepo == nil {
-		return nil, apperror.ServiceUnavailable("INTERNAL_ERROR", "数据库未配置，暂不支持回测", nil)
-	}
-	if s.modelClient == nil {
-		return nil, apperror.ServiceUnavailable("MODEL_SERVICE_UNAVAILABLE", "模型服务未初始化", nil)
-	}
-
-	modelType, granularity, appErr := normalizeForecastRequest(input.ModelType, input.Granularity)
-	if appErr != nil {
-		return nil, appErr
-	}
-	if err := validateForecastRange(input.BacktestStart, input.BacktestEnd); err != nil {
-		return nil, apperror.Unprocessable("INVALID_REQUEST", err.Error(), nil)
-	}
-
-	dataset, appErr := getReadyDatasetRecord(ctx, s.datasetRepo, datasetID)
-	if appErr != nil {
-		return nil, appErr
-	}
-	rows, err := readProcessedFeatureRows(*dataset.ProcessedFilePath)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-
-	runtimeConfig, err := s.systemConfigService.Get(ctx)
-	if err != nil {
-		return nil, apperror.Internal(err)
-	}
-	historyRows, appErr := selectForecastHistoryRows(rows, input.BacktestStart, runtimeConfig.ModelHistoryWindowConfig.ForecastHistoryDays)
-	if appErr != nil {
-		return nil, appErr
-	}
-	actualRows := filterRowsInRange(rows, input.BacktestStart, input.BacktestEnd)
-	if len(actualRows) != expected15MinutePoints(input.BacktestStart, input.BacktestEnd) {
-		return nil, apperror.Unprocessable("INSUFFICIENT_HISTORY", "回测区间缺少完整实际值", map[string]any{"actual_points": len(actualRows)})
-	}
-
-	series := append(buildModelSeries(historyRows), buildModelSeries(actualRows)...)
-	response, err := s.modelClient.Backtest(ctx, modelclient.BacktestRequest{
-		ModelType:     modelType,
-		DatasetID:     datasetID,
-		BacktestStart: input.BacktestStart.Format(time.RFC3339),
-		BacktestEnd:   input.BacktestEnd.Format(time.RFC3339),
-		Granularity:   granularity,
-		Series:        series,
-		Metadata:      modelclient.Metadata{Granularity: granularity, Unit: "w"},
-	})
-	if err != nil {
-		return nil, apperror.ServiceUnavailable("MODEL_SERVICE_UNAVAILABLE", "回测模型服务调用失败", map[string]any{"error": err.Error()})
-	}
-
-	points := make([]domain.BacktestPredictionPoint, 0, len(response.Predictions))
-	for _, point := range response.Predictions {
-		ts, parseErr := time.Parse(time.RFC3339, point.Timestamp)
-		if parseErr != nil {
-			return nil, apperror.ServiceUnavailable("MODEL_SERVICE_INVALID_RESPONSE", "模型返回的回测时间格式非法", map[string]any{"timestamp": point.Timestamp})
-		}
-		points = append(points, domain.BacktestPredictionPoint{
-			Timestamp: ts,
-			Actual:    roundFloat(point.Actual, 6),
-			Predicted: roundFloat(point.Predicted, 6),
-		})
-	}
-
-	return map[string]any{
-		"backtest": map[string]any{
-			"dataset_id":     datasetID,
-			"model_type":     modelType,
-			"backtest_start": input.BacktestStart,
-			"backtest_end":   input.BacktestEnd,
-			"granularity":    granularity,
-			"metrics": map[string]any{
-				"mae":   roundFloat(response.Metrics.MAE, 4),
-				"rmse":  roundFloat(response.Metrics.RMSE, 4),
-				"smape": roundFloat(response.Metrics.SMAPE, 4),
-				"wape":  roundFloat(response.Metrics.WAPE, 4),
-			},
-		},
-		"predictions": points,
-	}, nil
-}
-
 func normalizeForecastRequest(modelType, granularity string) (string, string, *apperror.AppError) {
 	normalizedModelType := strings.TrimSpace(strings.ToLower(modelType))
 	if normalizedModelType == "" {
@@ -344,17 +315,64 @@ func validateForecastRange(start, end time.Time) error {
 	return nil
 }
 
+func validateFutureForecastWindow(datasetTimeEnd time.Time, start, end time.Time) (int, *apperror.AppError) {
+	datasetDayStart := normalizeDayStart(datasetTimeEnd)
+	targetDayStart := normalizeDayStart(start)
+	if !start.Equal(targetDayStart) {
+		return 0, apperror.Unprocessable("INVALID_REQUEST", "预测区间必须从整天起点开始", map[string]any{
+			"forecast_start": start,
+		})
+	}
+
+	for dayOffset := 1; dayOffset <= 3; dayOffset++ {
+		expectedStart := datasetDayStart.AddDate(0, 0, dayOffset)
+		expectedEnd := expectedStart.Add(95 * 15 * time.Minute)
+		if start.Equal(expectedStart) && end.Equal(expectedEnd) {
+			return dayOffset, nil
+		}
+	}
+
+	return 0, apperror.Unprocessable("INVALID_REQUEST", "当前仅支持预测未来 3 天（x+1 到 x+3）", map[string]any{
+		"dataset_time_end": datasetTimeEnd,
+		"forecast_start":   start,
+		"forecast_end":     end,
+	})
+}
+
 func expected15MinutePoints(start, end time.Time) int {
 	return int(end.Sub(start)/(15*time.Minute)) + 1
 }
 
-func selectForecastHistoryRows(rows []processedFeatureRow, forecastStart time.Time, historyDays int) ([]processedFeatureRow, *apperror.AppError) {
+func selectForecastHistoryRowsFromSources(
+	actualRows []processedFeatureRow,
+	predictedRows []processedFeatureRow,
+	forecastStart time.Time,
+	historyDays int,
+) ([]processedFeatureRow, *apperror.AppError) {
 	expectedPoints := historyDays * 96
 	if expectedPoints <= 0 {
 		expectedPoints = 288
 	}
 	historyStart := forecastStart.Add(-time.Duration(expectedPoints) * 15 * time.Minute)
-	filtered := filterRowsByExclusiveEnd(rows, historyStart, forecastStart)
+	filtered := make([]processedFeatureRow, 0, expectedPoints)
+
+	for _, row := range actualRows {
+		if row.Timestamp.Before(historyStart) || !row.Timestamp.Before(forecastStart) {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	for _, row := range predictedRows {
+		if row.Timestamp.Before(historyStart) || !row.Timestamp.Before(forecastStart) {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].Timestamp.Before(filtered[j].Timestamp)
+	})
+
 	if len(filtered) != expectedPoints {
 		return nil, apperror.Unprocessable("INSUFFICIENT_HISTORY", "历史数据不足，至少需要最近 3 天完整 15 分钟序列", map[string]any{
 			"expected_points": expectedPoints,
@@ -369,10 +387,54 @@ func buildForecastSeries(start time.Time, predictions []float64) []domain.Foreca
 	for index, value := range predictions {
 		series = append(series, domain.ForecastSeriesPoint{
 			Timestamp: start.Add(time.Duration(index) * 15 * time.Minute),
-			Predicted: roundFloat(value, 6),
+			Predicted: roundFloat(clampNonNegative(value), 6),
 		})
 	}
 	return series
+}
+
+func buildLatestSlotTemplates(rows []processedFeatureRow) map[int]processedFeatureRow {
+	templates := make(map[int]processedFeatureRow, 96)
+	for _, row := range rows {
+		slotIndex := row.Timestamp.Hour()*4 + row.Timestamp.Minute()/15
+		templates[slotIndex] = row
+	}
+	return templates
+}
+
+func buildPredictedHistoryRows(
+	series []domain.ForecastSeriesPoint,
+	slotTemplates map[int]processedFeatureRow,
+) []processedFeatureRow {
+	rows := make([]processedFeatureRow, 0, len(series))
+	for _, point := range series {
+		slotIndex := point.Timestamp.Hour()*4 + point.Timestamp.Minute()/15
+		template, exists := slotTemplates[slotIndex]
+		activeCount := 0
+		burstCount := 0
+		if exists {
+			activeCount = template.ActiveApplianceCount
+			burstCount = template.BurstEventCount
+		}
+		rows = append(rows, processedFeatureRow{
+			Timestamp:            point.Timestamp,
+			Aggregate:            clampNonNegative(point.Predicted),
+			ActiveApplianceCount: activeCount,
+			BurstEventCount:      burstCount,
+		})
+	}
+	return rows
+}
+
+func normalizeDayStart(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
+}
+
+func clampNonNegative(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func buildForecastSummary(start, end time.Time, granularity string, series []domain.ForecastSeriesPoint, peakValleyConfig domain.PeakValleyConfig) domain.ForecastSummary {

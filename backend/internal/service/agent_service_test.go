@@ -282,9 +282,45 @@ func TestBuildRecentHistorySummaryUsesLatestWindow(t *testing.T) {
 	}
 }
 
+func TestNormalizeReportSummaryResponseHidesTechnicalReasonInNote(t *testing.T) {
+	reason := "LLM_BASE_URL_MISSING"
+	summary := normalizeReportSummaryResponse(
+		&domain.DatasetRecord{Name: "house_1"},
+		&agentclient.ReportSummaryResponse{
+			Title:    "居民用电分析报告 - house_1",
+			Overview: "系统已根据现有分析结果整理报告摘要。",
+			Sections: []agentclient.ReportSection{
+				{Title: "总体概览", Body: "系统已根据现有分析结果整理报告摘要。"},
+			},
+			Recommendations: []string{"优先检查峰时段负荷安排"},
+			Degraded:        true,
+			ErrorReason:     &reason,
+		},
+	)
+
+	var note string
+	for _, section := range summary.Sections {
+		if section.Title == "附注" {
+			note = section.Body
+			break
+		}
+	}
+
+	if note == "" {
+		t.Fatal("附注为空")
+	}
+	if strings.Contains(note, reason) {
+		t.Fatalf("附注暴露了技术原因码: %s", note)
+	}
+	if !strings.Contains(note, "未启用增强总结能力") {
+		t.Fatalf("附注 = %s, want 用户可读说明", note)
+	}
+}
+
 type agentTestClient struct {
-	response *agentclient.AskResponse
-	err      error
+	response       *agentclient.AskResponse
+	reportResponse *agentclient.ReportSummaryResponse
+	err            error
 }
 
 func (c agentTestClient) Health(context.Context) error {
@@ -298,9 +334,25 @@ func (c agentTestClient) Ask(context.Context, agentclient.AskRequest) (*agentcli
 	return c.response, nil
 }
 
+func (c agentTestClient) SummarizeReport(context.Context, agentclient.ReportSummaryRequest) (*agentclient.ReportSummaryResponse, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.reportResponse, nil
+}
+
+func (c agentTestClient) RenderPDF(context.Context, agentclient.RenderPDFRequest) ([]byte, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return []byte("%PDF-1.4"), nil
+}
+
 type recordingAgentClient struct {
-	request  *agentclient.AskRequest
-	response *agentclient.AskResponse
+	request       *agentclient.AskRequest
+	reportRequest *agentclient.ReportSummaryRequest
+	response      *agentclient.AskResponse
+	reportResp    *agentclient.ReportSummaryResponse
 }
 
 func (c *recordingAgentClient) Health(context.Context) error {
@@ -311,6 +363,16 @@ func (c *recordingAgentClient) Ask(_ context.Context, request agentclient.AskReq
 	requestCopy := request
 	c.request = &requestCopy
 	return c.response, nil
+}
+
+func (c *recordingAgentClient) SummarizeReport(_ context.Context, request agentclient.ReportSummaryRequest) (*agentclient.ReportSummaryResponse, error) {
+	requestCopy := request
+	c.reportRequest = &requestCopy
+	return c.reportResp, nil
+}
+
+func (c *recordingAgentClient) RenderPDF(_ context.Context, _ agentclient.RenderPDFRequest) ([]byte, error) {
+	return []byte("%PDF-1.4"), nil
 }
 
 type agentDatasetRepo struct {

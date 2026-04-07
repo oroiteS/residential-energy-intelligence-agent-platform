@@ -3,15 +3,11 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"github.com/xuri/excelize/v2"
-	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"residential-energy-intelligence-agent-platform/internal/config"
 	"residential-energy-intelligence-agent-platform/internal/domain"
@@ -25,6 +21,7 @@ type ReportService struct {
 	analysisRepo repository.AnalysisResultRepository
 	adviceRepo   repository.EnergyAdviceRepository
 	reportRepo   repository.ReportRepository
+	agentService *AgentService
 	logger       *zap.Logger
 }
 
@@ -34,6 +31,7 @@ func NewReportService(
 	analysisRepo repository.AnalysisResultRepository,
 	adviceRepo repository.EnergyAdviceRepository,
 	reportRepo repository.ReportRepository,
+	agentService *AgentService,
 	logger *zap.Logger,
 ) *ReportService {
 	return &ReportService{
@@ -42,6 +40,7 @@ func NewReportService(
 		analysisRepo: analysisRepo,
 		adviceRepo:   adviceRepo,
 		reportRepo:   reportRepo,
+		agentService: agentService,
 		logger:       logger,
 	}
 }
@@ -51,10 +50,10 @@ func (s *ReportService) Export(ctx context.Context, datasetID uint64, reportType
 		return nil, apperror.ServiceUnavailable("INTERNAL_ERROR", "数据库未配置，暂不支持导出报告", nil)
 	}
 	if strings.TrimSpace(reportType) == "" {
-		reportType = "excel"
+		reportType = "pdf"
 	}
-	if reportType != "excel" {
-		return nil, apperror.Unprocessable("INVALID_REQUEST", "当前仅支持 excel 报告导出", nil)
+	if reportType != "pdf" {
+		return nil, apperror.Unprocessable("INVALID_REQUEST", "当前仅支持 pdf 报告导出", nil)
 	}
 
 	dataset, err := s.datasetRepo.GetByID(ctx, datasetID)
@@ -81,14 +80,28 @@ func (s *ReportService) Export(ctx context.Context, datasetID uint64, reportType
 		return nil, apperror.Internal(err)
 	}
 
-	filePath, fileSize, err := s.writeExcelReport(dataset, analysis, advices)
+	var (
+		filePath string
+		fileSize uint64
+	)
+	if s.agentService == nil {
+		return nil, apperror.ServiceUnavailable("INTERNAL_ERROR", "智能体服务未配置，暂不支持 PDF 导出", nil)
+	}
+	summary, appErr := s.agentService.GenerateReportSummary(ctx, dataset, analysis)
+	if appErr != nil {
+		return nil, appErr
+	}
+	filePath, fileSize, err = s.writePDFReport(ctx, dataset, analysis, advices, summary)
 	if err != nil {
-		return nil, apperror.ServiceUnavailable("EXPORT_FAILED", "报告导出失败", map[string]any{"error": err.Error()})
+		return nil, apperror.ServiceUnavailable("EXPORT_FAILED", "报告导出失败", map[string]any{
+			"error":       err.Error(),
+			"report_type": reportType,
+		})
 	}
 
 	record := &domain.ReportRecord{
 		DatasetID:  datasetID,
-		ReportType: "excel",
+		ReportType: reportType,
 		FilePath:   filePath,
 		FileSize:   fileSize,
 	}
@@ -96,7 +109,7 @@ func (s *ReportService) Export(ctx context.Context, datasetID uint64, reportType
 		return nil, apperror.Internal(err)
 	}
 
-	s.logInfo("报告导出完成", zap.Uint64("dataset_id", datasetID), zap.Uint64("report_id", record.ID))
+	s.logInfo("报告导出完成", zap.Uint64("dataset_id", datasetID), zap.Uint64("report_id", record.ID), zap.String("report_type", reportType))
 	return reportDTO(record), nil
 }
 
@@ -145,65 +158,6 @@ func (s *ReportService) GetDownloadPath(ctx context.Context, reportID uint64) (s
 	}
 
 	return record.FilePath, filepath.Base(record.FilePath), nil
-}
-
-func (s *ReportService) writeExcelReport(
-	dataset *domain.DatasetRecord,
-	analysis *domain.AnalysisResultRecord,
-	advices []domain.EnergyAdviceRecord,
-) (string, uint64, error) {
-	reportDir := filepath.Join(s.cfg.OutputRootDir, "reports")
-	if err := os.MkdirAll(reportDir, 0o755); err != nil {
-		return "", 0, err
-	}
-
-	file := excelize.NewFile()
-	defer func() {
-		_ = file.Close()
-	}()
-
-	file.SetSheetName("Sheet1", "summary")
-	summaryRows := [][]any{
-		{"数据集名称", dataset.Name},
-		{"家庭标识", nullableString(dataset.HouseholdID)},
-		{"时间范围起点", dataset.TimeStart},
-		{"时间范围终点", dataset.TimeEnd},
-		{"总用电量(kWh)", analysis.TotalKWH},
-		{"日均用电量(kWh)", analysis.DailyAvgKWH},
-		{"最高负荷(W)", analysis.MaxLoadW},
-		{"最高负荷时间", analysis.MaxLoadTime},
-		{"最低负荷(W)", analysis.MinLoadW},
-		{"最低负荷时间", analysis.MinLoadTime},
-		{"峰时占比", analysis.PeakRatio},
-		{"谷时占比", analysis.ValleyRatio},
-		{"平时占比", analysis.FlatRatio},
-	}
-	for index, row := range summaryRows {
-		cellA, _ := excelize.CoordinatesToCellName(1, index+1)
-		cellB, _ := excelize.CoordinatesToCellName(2, index+1)
-		file.SetCellValue("summary", cellA, row[0])
-		file.SetCellValue("summary", cellB, row[1])
-	}
-
-	adviceSheet := "advices"
-	file.NewSheet(adviceSheet)
-	file.SetCellValue(adviceSheet, "A1", "建议摘要")
-	file.SetCellValue(adviceSheet, "B1", "创建时间")
-	for index, advice := range advices {
-		file.SetCellValue(adviceSheet, fmt.Sprintf("A%d", index+2), nullableString(advice.Summary))
-		file.SetCellValue(adviceSheet, fmt.Sprintf("B%d", index+2), advice.CreatedAt)
-	}
-
-	path := filepath.ToSlash(filepath.Join(reportDir, fmt.Sprintf("report_%d_%d.xlsx", dataset.ID, time.Now().UnixNano())))
-	if err := file.SaveAs(path); err != nil {
-		return "", 0, err
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", 0, err
-	}
-	return path, uint64(info.Size()), nil
 }
 
 func reportDTO(record *domain.ReportRecord) map[string]any {

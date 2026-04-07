@@ -190,7 +190,7 @@ export function AskAssistantModal({
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            {'当前问答流程已按“会话列表 -> 消息记录 -> 发起提问”的接口语义组织，后续切换真实后端时不需要再改页面结构。'}
+            选择会话后即可继续追问，回答会保留上下文并同步展示依据与建议。
           </Typography.Paragraph>
 
           <div className="assistant-layout">
@@ -267,7 +267,7 @@ export function AskAssistantModal({
                 rows={4}
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
-                placeholder="例如：为什么我家夜间负荷偏高？未来一天还有哪些高负荷风险？"
+                placeholder="例如：为什么我家夜间负荷偏高？未来一天还有哪些高负荷风险？…"
               />
 
               <Space wrap>
@@ -297,8 +297,8 @@ export function AskAssistantModal({
                 <Alert
                   type="warning"
                   showIcon
-                  message="智能问答已降级到规则建议"
-                  description={answer.error_reason ?? '暂未提供错误原因'}
+                  message="当前回答为简化结果"
+                  description="部分依据暂不可用，建议结合图表与报告交叉查看。"
                 />
               ) : null}
 

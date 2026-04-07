@@ -110,7 +110,7 @@ export function DatasetsPage() {
       setPageSize(result.pagination.page_size)
       setTotal(result.pagination.total)
     } catch {
-      setError('数据集列表加载失败，请检查后端服务或稍后重试。')
+      setError('数据集列表加载失败，请稍后重试。')
     } finally {
       setLoading(false)
     }
@@ -178,21 +178,21 @@ export function DatasetsPage() {
   return (
     <div className="page-stack">
       <PageHero
-        eyebrow="首版闭环"
+        eyebrow="数据接入"
         title="数据集中心"
-        description="上传原始用电文件，查看处理状态，并进入详情页查看分析、预测、建议和聊天结果。"
+        description="上传原始用电文件，查看处理进度，并进入详情页继续分析、预测与节能建议。"
         icon={<AppstoreOutlined />}
         extra={
           <div className="hero-side-card dataset-hero__aside">
             <div>
               <Typography.Text className="dataset-hero__aside-label">
-                当前页记录点数
+                当前页记录量
               </Typography.Text>
               <Typography.Title level={2} className="dataset-hero__aside-value">
                 {formatNumber(totalRows, 0)}
               </Typography.Title>
               <Typography.Paragraph className="dataset-hero__aside-desc">
-                当前筛选结果对应的总记录点数，用来快速判断样本规模是否足够进入后续分析。
+                帮助快速判断本次筛选结果的样本规模。
               </Typography.Paragraph>
             </div>
 
@@ -214,23 +214,23 @@ export function DatasetsPage() {
         }
       >
         <div className="dataset-hero__meta">
-          <span className="ant-tag tone-tag tone-tag--accent">当前页 {datasets.length} 个条目</span>
-          <span className="ant-tag tone-tag">筛选总数 {total}</span>
+          <span className="ant-tag tone-tag tone-tag--accent">本页 {datasets.length} 个数据集</span>
+          <span className="ant-tag tone-tag">筛选命中 {total}</span>
           <span className="ant-tag tone-tag tone-tag--muted">每页 {pageSize} 项</span>
         </div>
 
         <div className="dataset-hero__metrics">
           <MetricCard
-            label="当前页条目"
+            label="当前页数据集"
             value={String(datasets.length)}
             hint="本页实际展示的数据集数量"
             accent="amber"
             icon={<AppstoreOutlined />}
           />
           <MetricCard
-            label="筛选结果"
+            label="筛选命中"
             value={String(total)}
-            hint="后端分页返回的总命中数"
+            hint="符合当前筛选条件的数据集数量"
             accent="olive"
             icon={<SearchOutlined />}
           />
@@ -272,14 +272,14 @@ export function DatasetsPage() {
           <SectionCard
             className="dataset-list-card"
             title="数据集列表"
-            subtitle="状态、时间范围和记录规模会直接影响后续分析与建议质量。"
+            subtitle="状态、时间范围和记录规模有助于快速判断数据集是否可用。"
             extra={
               <div className="dataset-list__toolbar">
                 <div className="dataset-list__toolbar-fields">
                   <Input
                     allowClear
                     prefix={<SearchOutlined />}
-                    placeholder="按名称、家庭标识筛选"
+                    placeholder="按名称、家庭标识筛选…"
                     value={keyword}
                     onChange={(event) => {
                       setKeyword(event.target.value)
@@ -362,16 +362,16 @@ export function DatasetsPage() {
           <SectionCard
             className="dataset-upload-card"
             title="上传并导入"
-            subtitle="这里只保留用户真正需要填写的内容，内部字段按系统默认值处理。"
+            subtitle="选择文件并填写名称，即可完成导入。"
           >
             <div className="dataset-upload__summary">
               <div className="dataset-upload__summary-icon">
                 <FileTextOutlined />
               </div>
               <div>
-                <Typography.Text strong>导入流程</Typography.Text>
+                <Typography.Text strong>导入说明</Typography.Text>
                 <Typography.Paragraph className="dataset-upload__summary-text">
-                  选择原始文件后，补充一个清晰名称即可提交；其余解析参数由系统使用默认策略完成。
+                  上传后系统会自动开始处理，你可以在列表中持续查看进度。
                 </Typography.Paragraph>
               </div>
             </div>
@@ -393,10 +393,10 @@ export function DatasetsPage() {
                   />
                   <InboxOutlined className="upload-dropzone__icon" />
                   <Typography.Text strong>
-                    {selectedFile ? selectedFile.name : '点击选择 CSV 或 xlsx 文件'}
+                    {selectedFile ? selectedFile.name : '点击选择 CSV 或 XLSX 文件'}
                   </Typography.Text>
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                    支持直接导入原始文件，系统会自动完成默认解析。
+                    建议使用命名清晰的原始用电文件。
                   </Typography.Paragraph>
                 </label>
               </Form.Item>
@@ -412,7 +412,7 @@ export function DatasetsPage() {
                 <Input
                   value={datasetName}
                   onChange={(event) => setDatasetName(event.target.value)}
-                  placeholder="例如：REFIT House 3"
+                  placeholder="例如：REFIT House 3…"
                 />
               </Form.Item>
 
@@ -421,7 +421,7 @@ export function DatasetsPage() {
                   rows={3}
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
-                  placeholder="简要记录样本特征或用途"
+                  placeholder="简要记录样本特征或用途…"
                 />
               </Form.Item>
 

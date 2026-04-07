@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.config import Settings
-from app.contracts import AgentAskRequest
+from app.contracts import AgentAskRequest, AgentReportSummaryRequest
 
 
 class CitationItem(BaseModel):
@@ -25,6 +25,25 @@ class AgentOutput(BaseModel):
     answer: str = Field(min_length=1)
     citations: list[CitationItem] = Field(default_factory=list)
     actions: list[str] = Field(default_factory=list)
+
+
+class ReportSection(BaseModel):
+    """PDF 报告章节。"""
+
+    title: str = Field(min_length=1)
+    body: str = Field(min_length=1)
+
+
+class ReportSummaryOutput(BaseModel):
+    """结构化报告摘要。"""
+
+    title: str = Field(min_length=1)
+    overview: str = Field(min_length=1)
+    sections: list[ReportSection] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+
+
+REPORT_SECTION_ORDER = ["总体概览", "行为判断", "预测风险", "附注"]
 
 
 class AgentService:
@@ -67,6 +86,28 @@ class AgentService:
                 "answer": fallback_answer,
                 "citations": citations,
                 "actions": fallback_actions,
+                "degraded": True,
+                "error_reason": "LLM_REQUEST_FAILED",
+            }
+
+    def summarize_report(self, request: AgentReportSummaryRequest) -> dict[str, Any]:
+        fallback = self._build_fallback_report_summary(request.context)
+
+        if not self._can_use_langchain():
+            return {
+                **fallback,
+                "degraded": True,
+                "error_reason": self._build_unavailable_reason(),
+            }
+
+        try:
+            result = self._run_langchain_report_summary(request, fallback)
+            result["degraded"] = False
+            result["error_reason"] = None
+            return result
+        except Exception:
+            return {
+                **fallback,
                 "degraded": True,
                 "error_reason": "LLM_REQUEST_FAILED",
             }
@@ -179,6 +220,67 @@ class AgentService:
             "actions": validated_output.actions,
         }
 
+    def _run_langchain_report_summary(
+        self,
+        request: AgentReportSummaryRequest,
+        fallback_summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        from langchain_core.prompts import ChatPromptTemplate
+        from langchain_openai import ChatOpenAI
+
+        model = ChatOpenAI(
+            base_url=self.settings.llm_base_url,
+            api_key=self.settings.llm_api_key,
+            model=self.settings.llm_model,
+            temperature=self.settings.llm_temperature,
+            timeout=self.settings.llm_report_timeout_seconds,
+        )
+        structured_model = model.with_structured_output(
+            ReportSummaryOutput,
+            method="function_calling",
+            strict=True,
+        )
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    (
+                        "你是居民用电分析报告撰写助手。"
+                        "只能根据提供的上下文整理报告，禁止编造不存在的数据。"
+                        "报告语气要专业、简洁、可直接用于 PDF 导出。"
+                        "输出必须包含 title、overview、sections、recommendations。"
+                    ),
+                ),
+                (
+                    "human",
+                    (
+                        "请根据下面的上下文整理一份居民用电分析报告摘要。\n"
+                        "上下文：{context_json}\n"
+                        "降级参考：{fallback_summary_json}\n"
+                        "要求：\n"
+                        "1. title 用中文，不超过 24 个字。\n"
+                        "2. overview 用 2 到 4 句概括整体情况。\n"
+                        "3. sections 必须且只能输出以下四个章节：总体概览、行为判断、预测风险、附注。\n"
+                        "4. 每个章节都要有 title 和 body，title 必须与要求完全一致。\n"
+                        "5. recommendations 输出 2 到 5 条，必须是可执行建议。\n"
+                        "6. 所有内容都必须能在上下文中找到依据。\n"
+                    ),
+                ),
+            ]
+        )
+
+        chain = prompt | structured_model
+        parsed = chain.invoke(
+            {
+                "context_json": json.dumps(request.context, ensure_ascii=False),
+                "fallback_summary_json": json.dumps(fallback_summary, ensure_ascii=False),
+            }
+        )
+
+        normalized = self._normalize_report_summary_output(parsed, fallback_summary)
+        return normalized.model_dump()
+
     def _normalize_output(
         self,
         parsed: AgentOutput | dict[str, Any],
@@ -199,6 +301,72 @@ class AgentService:
         sanitized_actions = self._sanitize_actions(output.actions, fallback_actions)
 
         return output.model_copy(update={"citations": sanitized_citations, "actions": sanitized_actions})
+
+    def _normalize_report_summary_output(
+        self,
+        parsed: ReportSummaryOutput | dict[str, Any],
+        fallback_summary: dict[str, Any],
+    ) -> ReportSummaryOutput:
+        if isinstance(parsed, ReportSummaryOutput):
+            output = parsed
+        else:
+            output = ReportSummaryOutput.model_validate(parsed)
+
+        title = str(output.title).strip() or str(fallback_summary["title"]).strip()
+        overview = str(output.overview).strip() or str(fallback_summary["overview"]).strip()
+
+        fallback_sections = self._ordered_report_sections(
+            fallback_summary.get("sections", []),
+            fallback_summary["overview"],
+        )
+        sanitized_sections = self._ordered_report_sections(
+            [{"title": item.title, "body": item.body} for item in output.sections],
+            overview,
+        )
+        if not sanitized_sections:
+            sanitized_sections = fallback_sections
+
+        fallback_recommendations = [
+            str(item).strip()
+            for item in fallback_summary.get("recommendations", [])
+            if str(item).strip()
+        ]
+        sanitized_recommendations: list[str] = []
+        for item in output.recommendations:
+            value = str(item).strip()
+            if value and value not in sanitized_recommendations:
+                sanitized_recommendations.append(value)
+        if not sanitized_recommendations:
+            sanitized_recommendations = fallback_recommendations
+
+        return ReportSummaryOutput(
+            title=title,
+            overview=overview,
+            sections=sanitized_sections,
+            recommendations=sanitized_recommendations[:5],
+        )
+
+    def _ordered_report_sections(
+        self,
+        raw_sections: list[dict[str, Any]],
+        overview: str,
+    ) -> list[ReportSection]:
+        sections_by_title: dict[str, str] = {}
+        for item in raw_sections:
+            title = str(item.get("title", "")).strip()
+            body = str(item.get("body", "")).strip()
+            if title in REPORT_SECTION_ORDER and body:
+                sections_by_title[title] = body
+
+        if overview.strip():
+            sections_by_title["总体概览"] = overview.strip()
+
+        ordered_sections: list[ReportSection] = []
+        for title in REPORT_SECTION_ORDER:
+            body = sections_by_title.get(title, "").strip()
+            if body:
+                ordered_sections.append(ReportSection(title=title, body=body))
+        return ordered_sections
 
     def _sanitize_citations(
         self,
@@ -329,3 +497,97 @@ class AgentService:
             sentence_parts.append("建议结合规则建议优先处理峰时段和持续负荷较高的设备。")
 
         return "".join(sentence_parts)
+
+    def _build_fallback_report_summary(self, context: dict[str, Any]) -> dict[str, Any]:
+        dataset = context.get("dataset", {}) or {}
+        analysis_summary = context.get("analysis_summary", {}) or {}
+        classification_result = context.get("classification_result", {}) or {}
+        forecast_summary = context.get("forecast_summary", {}) or {}
+        recent_history_summary = context.get("recent_history_summary", {}) or {}
+
+        title = "居民用电分析报告"
+        dataset_name = str(dataset.get("name", "")).strip()
+        if dataset_name:
+            title = f"{title} - {dataset_name}"
+
+        overview_parts: list[str] = []
+        if "daily_avg_kwh" in analysis_summary:
+            overview_parts.append(
+                f"日均用电量约为 {float(analysis_summary['daily_avg_kwh']):.2f} kWh。"
+            )
+        if "peak_ratio" in analysis_summary:
+            overview_parts.append(
+                f"峰时占比约为 {float(analysis_summary['peak_ratio']) * 100:.2f}%。"
+            )
+        predicted_label = str(classification_result.get("predicted_label", "")).strip()
+        if predicted_label:
+            overview_parts.append(f"行为类型判断为 {self._label_text(predicted_label)}。")
+        peak_period = str(forecast_summary.get("peak_period", "")).strip()
+        if peak_period:
+            overview_parts.append(f"预测高负荷时段集中在 {peak_period}。")
+        if not overview_parts:
+            overview_parts.append("当前智能体已降级，报告摘要基于已有统计分析结果自动整理。")
+        overview = "".join(overview_parts)
+
+        behavior_parts: list[str] = []
+        if predicted_label:
+            behavior_parts.append(f"当前家庭用电行为被识别为 {self._label_text(predicted_label)}。")
+        if "confidence" in classification_result:
+            behavior_parts.append(
+                f"分类置信度约为 {float(classification_result['confidence']) * 100:.2f}%。"
+            )
+
+        if "avg_active_appliance_count" in recent_history_summary:
+            behavior_parts.append(
+                f"最近窗口内平均活跃电器数量约 {float(recent_history_summary['avg_active_appliance_count']):.2f} 个。"
+            )
+        if "avg_burst_event_count" in recent_history_summary:
+            behavior_parts.append(
+                f"平均突发事件数约 {float(recent_history_summary['avg_burst_event_count']):.2f}。"
+            )
+        behavior = "".join(behavior_parts) or "当前缺少明确的行为分类结果，建议结合历史曲线进一步确认用电模式。"
+
+        risk_parts: list[str] = []
+        if "predicted_avg_load_w" in forecast_summary:
+            risk_parts.append(
+                f"预测平均负荷约 {float(forecast_summary['predicted_avg_load_w']):.2f} W。"
+            )
+        if "predicted_peak_load_w" in forecast_summary:
+            risk_parts.append(
+                f"预测峰值负荷约 {float(forecast_summary['predicted_peak_load_w']):.2f} W。"
+            )
+        risk_flags = forecast_summary.get("risk_flags", [])
+        if risk_flags:
+            risk_parts.append(f"预测风险标签包括 {risk_flags}。")
+        if peak_period:
+            risk_parts.append(f"预测高负荷时段集中在 {peak_period}。")
+        if "max_load_w" in recent_history_summary:
+            risk_parts.append(
+                f"历史窗口内最高负荷约 {float(recent_history_summary['max_load_w']):.2f} W。"
+            )
+        risk = "".join(risk_parts) or "当前缺少预测结果，暂无法给出稳定的风险判断。"
+
+        recommendations = self._build_actions(context)
+        if not recommendations:
+            recommendations = ["建议优先排查峰时段与夜间持续运行设备。"]
+        note = "本报告依据统计分析、行为分类、负荷预测与规则建议自动生成，适合作为阶段性分析与归档材料。"
+
+        return {
+            "title": title,
+            "overview": overview,
+            "sections": [
+                {"title": "总体概览", "body": overview},
+                {"title": "行为判断", "body": behavior},
+                {"title": "预测风险", "body": risk},
+                {"title": "附注", "body": note},
+            ],
+            "recommendations": recommendations,
+        }
+
+    def _label_text(self, label: str) -> str:
+        return {
+            "day_high_night_low": "白天高晚上低型",
+            "day_low_night_high": "白天低晚上高型",
+            "all_day_high": "全天高负载型",
+            "all_day_low": "全天低负载型",
+        }.get(label, label)

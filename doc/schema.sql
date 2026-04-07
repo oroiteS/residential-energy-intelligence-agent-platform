@@ -4,7 +4,6 @@
 -- 说明：
 -- 1. 本脚本只负责数据库结构与基础系统配置初始化
 -- 2. 采用“元数据入库、大对象落文件”的设计
--- 3. 默认 LLM 配置不在此脚本中写死，待用户配置后再回填 default_llm_id
 -- ============================================================
 
 USE `resident`;
@@ -39,34 +38,7 @@ ON DUPLICATE KEY UPDATE
     `description` = VALUES(`description`);
 
 -- -----------------------------------------------------------
--- 2. llm_configs — LLM API 配置
--- -----------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `llm_configs` (
-    `id`              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `name`            VARCHAR(64)     NOT NULL COMMENT '配置名称',
-    `base_url`        VARCHAR(512)    NOT NULL COMMENT 'OpenAI-compatible API 地址',
-    `api_key`         VARCHAR(512)    NOT NULL COMMENT 'API 密钥',
-    `model_name`      VARCHAR(128)    NOT NULL COMMENT '模型标识',
-    `temperature`     DECIMAL(3,2)    NOT NULL DEFAULT 0.20 COMMENT '温度参数',
-    `timeout_seconds` INT UNSIGNED    NOT NULL DEFAULT 60 COMMENT '请求超时秒数',
-    `is_default`      TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否为默认配置',
-    `created_at`      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    `updated_at`      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_llm_configs_name` (`name`),
-    KEY `idx_llm_configs_is_default` (`is_default`),
-    CONSTRAINT `chk_llm_configs_temperature`
-        CHECK (`temperature` >= 0.00 AND `temperature` <= 2.00),
-    CONSTRAINT `chk_llm_configs_timeout`
-        CHECK (`timeout_seconds` > 0)
-) ENGINE=InnoDB
-  DEFAULT CHARSET=utf8mb4
-  COLLATE=utf8mb4_unicode_ci
-  COMMENT='LLM API 配置表';
-
--- -----------------------------------------------------------
--- 3. datasets — 数据集
+-- 2. datasets — 数据集
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `datasets` (
     `id`                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -103,7 +75,7 @@ CREATE TABLE IF NOT EXISTS `datasets` (
   COMMENT='数据集表';
 
 -- -----------------------------------------------------------
--- 4. analysis_results — 统计分析结果
+-- 3. analysis_results — 统计分析结果
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `analysis_results` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -152,7 +124,7 @@ CREATE TABLE IF NOT EXISTS `analysis_results` (
   COMMENT='统计分析结果表';
 
 -- -----------------------------------------------------------
--- 5. classification_results — 行为分类结果
+-- 4. classification_results — 行为分类结果
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `classification_results` (
     `id`              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -186,7 +158,7 @@ CREATE TABLE IF NOT EXISTS `classification_results` (
   COMMENT='行为分类结果表';
 
 -- -----------------------------------------------------------
--- 6. forecast_results — 时序预测结果
+-- 5. forecast_results — 时序预测结果
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `forecast_results` (
     `id`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -215,7 +187,7 @@ CREATE TABLE IF NOT EXISTS `forecast_results` (
   COMMENT='时序预测结果表';
 
 -- -----------------------------------------------------------
--- 7. chat_sessions — 聊天会话
+-- 6. chat_sessions — 聊天会话
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `chat_sessions` (
     `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -235,7 +207,7 @@ CREATE TABLE IF NOT EXISTS `chat_sessions` (
   COMMENT='聊天会话表';
 
 -- -----------------------------------------------------------
--- 9. chat_messages — 聊天消息
+-- 7. chat_messages — 聊天消息
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `chat_messages` (
     `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -259,7 +231,7 @@ CREATE TABLE IF NOT EXISTS `chat_messages` (
   COMMENT='聊天消息表';
 
 -- -----------------------------------------------------------
--- 10. energy_advices — 节能建议
+-- 8. energy_advices — 节能建议
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `energy_advices` (
     `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -283,7 +255,7 @@ CREATE TABLE IF NOT EXISTS `energy_advices` (
   COMMENT='节能建议表';
 
 -- -----------------------------------------------------------
--- 11. reports — 导出报告
+-- 9. reports — 导出报告
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `reports` (
     `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

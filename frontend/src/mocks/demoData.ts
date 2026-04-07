@@ -7,13 +7,11 @@ import type {
   ClassificationResult,
   DatasetDetailPayload,
   DatasetSummary,
-  ForecastBacktest,
   ForecastDetail,
   ForecastModelType,
   ForecastRecord,
   HealthStatus,
   ImportDatasetInput,
-  LlmConfig,
   ReportRecord,
   ReportType,
   SystemConfig,
@@ -58,18 +56,11 @@ function createForecastSeries(day: string, base: number, peakBoost: number) {
   })
 }
 
-function createBacktestSeries(day: string, base: number, drift: number) {
-  return Array.from({ length: 96 }, (_, index) => {
-    const hour = Math.floor(index / 4)
-    const minute = (index % 4) * 15
-    const actual = base + Math.sin((hour - 7) / 3.2) * 110 + Math.cos(index / 7) * 50
-    const predicted = actual + Math.sin(index / 5) * drift
-    return {
-      timestamp: `${day}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+08:00`,
-      actual: Number(Math.max(160, actual).toFixed(3)),
-      predicted: Number(Math.max(160, predicted).toFixed(3)),
-    }
-  })
+function createForecastWindow(day: string) {
+  return {
+    forecast_start: `${day}T00:00:00+08:00`,
+    forecast_end: `${day}T23:45:00+08:00`,
+  }
 }
 
 function createForecastRecord(
@@ -136,7 +127,6 @@ export const demoSystemConfig: SystemConfig = {
     '这是居民过去{{history_days}}天的实际用电情况、未来一段时间的预测用电情况，以及居民用电行为分类。请基于统计分析结果、历史用电摘要、未来预测摘要和分类结果，给出具体、可执行、可解释的节能建议，并指出关键依据。',
   data_upload_dir: './uploads/datasets',
   report_output_dir: './outputs/reports',
-  default_llm_id: 1,
 }
 
 export const demoHealthStatus: HealthStatus = {
@@ -366,8 +356,8 @@ export const demoReports: Record<number, ReportRecord[]> = {
     {
       id: 6,
       dataset_id: 1,
-      report_type: 'excel',
-      file_path: './outputs/reports/report_6.xlsx',
+      report_type: 'pdf',
+      file_path: './outputs/reports/report_6.pdf',
       file_size: 128734,
       created_at: '2026-04-01T09:28:00+08:00',
     },
@@ -376,31 +366,55 @@ export const demoReports: Record<number, ReportRecord[]> = {
     {
       id: 7,
       dataset_id: 2,
-      report_type: 'excel',
-      file_path: './outputs/reports/report_7.xlsx',
+      report_type: 'pdf',
+      file_path: './outputs/reports/report_7.pdf',
       file_size: 118420,
       created_at: '2026-04-01T09:43:00+08:00',
     },
   ],
 }
 
-const forecast1 = createForecastRecord(3, 1, 'transformer', '2026-04-01T10:18:00+08:00')
-const forecast2 = createForecastRecord(4, 1, 'lstm', '2026-04-01T10:10:00+08:00')
-const forecast3 = createForecastRecord(5, 2, 'lstm', '2026-04-01T10:26:00+08:00', {
+const forecast1 = createForecastRecord(3, 1, 'transformer', '2026-04-01T10:18:00+08:00', {
+  ...createForecastWindow('2015-01-01'),
   summary: {
-    forecast_start: '2014-09-30T00:00:00+08:00',
-    forecast_end: '2014-09-30T23:45:00+08:00',
+    ...createForecastWindow('2015-01-01'),
+    granularity: '15min',
+    predicted_avg_load_w: 812.4,
+    predicted_peak_load_w: 1658.2,
+    forecast_peak_periods: ['2015-01-01T18:30:00+08:00/2015-01-01T21:30:00+08:00'],
+    predicted_peak_ratio: 0.44,
+    predicted_valley_ratio: 0.2,
+    predicted_flat_ratio: 0.36,
+    risk_flags: ['evening_peak_risk', 'night_load_risk'],
+  },
+})
+const forecast2 = createForecastRecord(4, 1, 'lstm', '2026-04-01T10:10:00+08:00', {
+  ...createForecastWindow('2015-01-02'),
+  summary: {
+    ...createForecastWindow('2015-01-02'),
+    granularity: '15min',
+    predicted_avg_load_w: 768.9,
+    predicted_peak_load_w: 1492.6,
+    forecast_peak_periods: ['2015-01-02T18:15:00+08:00/2015-01-02T21:15:00+08:00'],
+    predicted_peak_ratio: 0.42,
+    predicted_valley_ratio: 0.22,
+    predicted_flat_ratio: 0.36,
+    risk_flags: ['evening_peak_risk'],
+  },
+})
+const forecast3 = createForecastRecord(5, 2, 'lstm', '2026-04-01T10:26:00+08:00', {
+  ...createForecastWindow('2014-10-01'),
+  summary: {
+    ...createForecastWindow('2014-10-01'),
     granularity: '15min',
     predicted_avg_load_w: 641.2,
     predicted_peak_load_w: 1268.5,
-    forecast_peak_periods: ['2014-09-30T09:00:00+08:00/2014-09-30T11:00:00+08:00'],
+    forecast_peak_periods: ['2014-10-01T09:00:00+08:00/2014-10-01T11:00:00+08:00'],
     predicted_peak_ratio: 0.35,
     predicted_valley_ratio: 0.22,
     predicted_flat_ratio: 0.43,
     risk_flags: ['morning_spike_risk'],
   },
-  forecast_start: '2014-09-30T00:00:00+08:00',
-  forecast_end: '2014-09-30T23:45:00+08:00',
 })
 
 export const demoForecasts: Record<number, ForecastRecord[]> = {
@@ -411,93 +425,17 @@ export const demoForecasts: Record<number, ForecastRecord[]> = {
 export const demoForecastDetails: Record<number, ForecastDetail> = {
   3: {
     forecast: forecast1,
-    series: createForecastSeries('2014-12-04', 480, 90),
+    series: createForecastSeries('2015-01-01', 480, 90),
   },
   4: {
     forecast: forecast2,
-    series: createForecastSeries('2014-12-04', 450, 70),
+    series: createForecastSeries('2015-01-02', 450, 70),
   },
   5: {
     forecast: forecast3,
-    series: createForecastSeries('2014-09-30', 390, 60),
+    series: createForecastSeries('2014-10-01', 390, 60),
   },
 }
-
-export const demoBacktests: Record<string, ForecastBacktest> = {
-  '1:transformer': {
-    backtest: {
-      dataset_id: 1,
-      model_type: 'transformer',
-      backtest_start: '2014-12-04T00:00:00+08:00',
-      backtest_end: '2014-12-04T23:45:00+08:00',
-      granularity: '15min',
-      metrics: {
-        mae: 15.2,
-        rmse: 23.6,
-        smape: 8.7,
-        wape: 6.1,
-      },
-    },
-    predictions: createBacktestSeries('2014-12-04', 470, 25),
-  },
-  '1:lstm': {
-    backtest: {
-      dataset_id: 1,
-      model_type: 'lstm',
-      backtest_start: '2014-12-04T00:00:00+08:00',
-      backtest_end: '2014-12-04T23:45:00+08:00',
-      granularity: '15min',
-      metrics: {
-        mae: 18.4,
-        rmse: 27.1,
-        smape: 10.2,
-        wape: 7.3,
-      },
-    },
-    predictions: createBacktestSeries('2014-12-04', 450, 32),
-  },
-  '2:lstm': {
-    backtest: {
-      dataset_id: 2,
-      model_type: 'lstm',
-      backtest_start: '2014-09-30T00:00:00+08:00',
-      backtest_end: '2014-09-30T23:45:00+08:00',
-      granularity: '15min',
-      metrics: {
-        mae: 12.7,
-        rmse: 19.5,
-        smape: 7.4,
-        wape: 5.2,
-      },
-    },
-    predictions: createBacktestSeries('2014-09-30', 390, 18),
-  },
-}
-
-export const demoLlmConfigs: LlmConfig[] = [
-  {
-    id: 1,
-    name: 'deepseek-local',
-    base_url: 'https://example.com/v1',
-    model_name: 'deepseek-chat',
-    temperature: 0.2,
-    timeout_seconds: 60,
-    is_default: true,
-    created_at: '2026-04-01T08:30:00+08:00',
-    updated_at: '2026-04-01T08:30:00+08:00',
-  },
-  {
-    id: 2,
-    name: 'qwen-compatible',
-    base_url: 'https://example.net/openai',
-    model_name: 'qwen-plus',
-    temperature: 0.3,
-    timeout_seconds: 45,
-    is_default: false,
-    created_at: '2026-04-01T08:42:00+08:00',
-    updated_at: '2026-04-01T08:42:00+08:00',
-  },
-]
 
 export const demoChatSessions: Record<number, ChatSession[]> = {
   1: [
@@ -609,34 +547,62 @@ export function buildMockImportedForecast(
   datasetId: number,
   modelType: ForecastModelType,
   forecastId: number,
+  forecastStart: string,
+  forecastEnd: string,
 ): ForecastDetail {
   const createdAt = '2026-04-01T10:40:00+08:00'
+  const datasetEnd = new Date('2014-10-04T23:45:00+08:00')
+  const targetStart = new Date(forecastStart)
+  const datasetDayStart = new Date(
+    datasetEnd.getFullYear(),
+    datasetEnd.getMonth(),
+    datasetEnd.getDate(),
+  )
+  const targetDayStart = new Date(
+    targetStart.getFullYear(),
+    targetStart.getMonth(),
+    targetStart.getDate(),
+  )
+  const dayOffset = Math.max(
+    1,
+    Math.round((targetDayStart.getTime() - datasetDayStart.getTime()) / (24 * 60 * 60 * 1000)),
+  )
+  const predictedAvgLoad =
+    modelType === 'transformer' ? 500 + dayOffset * 34 : 460 + dayOffset * 26
+  const predictedPeakLoad =
+    modelType === 'transformer' ? 860 + dayOffset * 84 : 780 + dayOffset * 72
+  const predictedPeakRatio = Number((0.39 + dayOffset * 0.015).toFixed(2))
+  const predictedValleyRatio = Number((0.21 + dayOffset * 0.005).toFixed(2))
+  const predictedFlatRatio = Number(
+    Math.max(0.15, 1 - predictedPeakRatio - predictedValleyRatio).toFixed(2),
+  )
   const record = createForecastRecord(forecastId, datasetId, modelType, createdAt, {
+    forecast_start: forecastStart,
+    forecast_end: forecastEnd,
+    summary: {
+      forecast_start: forecastStart,
+      forecast_end: forecastEnd,
+      granularity: '15min',
+      predicted_avg_load_w: predictedAvgLoad,
+      predicted_peak_load_w: predictedPeakLoad,
+      forecast_peak_periods: [
+        `${forecastStart.slice(0, 10)}T${dayOffset === 1 ? '18:15:00+08:00' : dayOffset === 2 ? '19:00:00+08:00' : '20:00:00+08:00'}/${forecastStart.slice(0, 10)}T${dayOffset === 1 ? '21:00:00+08:00' : dayOffset === 2 ? '21:45:00+08:00' : '22:30:00+08:00'}`,
+      ],
+      predicted_peak_ratio: predictedPeakRatio,
+      predicted_valley_ratio: predictedValleyRatio,
+      predicted_flat_ratio: predictedFlatRatio,
+      risk_flags: dayOffset >= 3 ? ['evening_peak_risk', 'night_load_risk'] : ['evening_peak_risk'],
+    },
     detail_path: `./outputs/forecasts/fc_${forecastId}.json`,
   })
 
   return {
     forecast: record,
-    series: createForecastSeries('2014-12-05', modelType === 'transformer' ? 500 : 460, 80),
-  }
-}
-
-export function buildMockImportedBacktest(
-  datasetId: number,
-  modelType: ForecastModelType,
-): ForecastBacktest {
-  return {
-    backtest: {
-      dataset_id: datasetId,
-      model_type: modelType,
-      backtest_start: '2014-12-05T00:00:00+08:00',
-      backtest_end: '2014-12-05T23:45:00+08:00',
-      granularity: '15min',
-      metrics: modelType === 'transformer'
-        ? { mae: 14.1, rmse: 21.4, smape: 8.1, wape: 5.9 }
-        : { mae: 17.3, rmse: 26.2, smape: 9.6, wape: 6.8 },
-    },
-    predictions: createBacktestSeries('2014-12-05', modelType === 'transformer' ? 490 : 450, 24),
+    series: createForecastSeries(
+      forecastStart.slice(0, 10),
+      predictedAvgLoad,
+      80 + dayOffset * 12,
+    ),
   }
 }
 
@@ -649,7 +615,7 @@ export function buildMockImportedReport(
     id: reportId,
     dataset_id: datasetId,
     report_type: reportType,
-    file_path: `./outputs/reports/report_${reportId}.${reportType === 'excel' ? 'xlsx' : reportType}`,
+    file_path: `./outputs/reports/report_${reportId}.${reportType}`,
     file_size: 1024 * 140,
     created_at: '2026-04-01T10:46:00+08:00',
   }

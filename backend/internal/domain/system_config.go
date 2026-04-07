@@ -29,5 +29,4 @@ type SystemRuntimeConfig struct {
 	EnergyAdvicePromptTemplate string                   `json:"energy_advice_prompt_template"`
 	DataUploadDir              string                   `json:"data_upload_dir"`
 	ReportOutputDir            string                   `json:"report_output_dir"`
-	DefaultLLMID               *uint64                  `json:"default_llm_id"`
 }

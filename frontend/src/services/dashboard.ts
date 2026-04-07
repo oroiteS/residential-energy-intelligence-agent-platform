@@ -1,7 +1,6 @@
 import axios from 'axios'
 import {
   buildMockImportedAnalysis,
-  buildMockImportedBacktest,
   buildMockImportedDataset,
   buildMockImportedForecast,
   buildMockImportedReport,
@@ -19,15 +18,11 @@ import type {
   DatasetListPayload,
   DatasetListQuery,
   DatasetSummary,
-  ForecastBacktest,
-  ForecastBacktestInput,
   ForecastDetail,
   ForecastPredictInput,
   ForecastRecord,
   HealthStatus,
   ImportDatasetInput,
-  LlmConfig,
-  LlmConfigInput,
   ReportRecord,
   ReportType,
   SystemConfig,
@@ -43,10 +38,6 @@ const http = axios.create({
 export const isMockMode =
   import.meta.env.DEV && import.meta.env.VITE_USE_MOCK !== 'false'
 
-export function getRuntimeModeLabel() {
-  return isMockMode ? 'Mock 联调模式' : '实时接口模式'
-}
-
 function sleep(ms = 280) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
@@ -61,6 +52,30 @@ function downloadBlob(filename: string, content: string) {
   anchor.download = filename
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+export function extractApiErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const responseMessage = error.response?.data?.message
+    if (typeof responseMessage === 'string' && responseMessage.trim()) {
+      return responseMessage.trim()
+    }
+
+    const responseError = error.response?.data?.error
+    if (typeof responseError === 'string' && responseError.trim()) {
+      return responseError.trim()
+    }
+
+    if (typeof error.message === 'string' && error.message.trim()) {
+      return error.message.trim()
+    }
+  }
+
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim()
+  }
+
+  return fallback
 }
 
 export async function fetchHealth(): Promise<HealthStatus> {
@@ -261,6 +276,7 @@ export async function exportDatasetReport(
   const { data } = await http.post<ApiEnvelope<{ report: ReportRecord }>>(
     `/datasets/${datasetId}/reports/export`,
     { report_type: reportType },
+    { timeout: 180000 },
   )
   return data.data.report
 }
@@ -313,7 +329,13 @@ export async function runForecast(
     const store = useMockStore.getState()
     const forecastIds = Object.values(store.forecastDetails).map((item) => item.forecast.id)
     const nextId = Math.max(0, ...forecastIds) + 1
-    const detail = buildMockImportedForecast(datasetId, input.model_type, nextId)
+    const detail = buildMockImportedForecast(
+      datasetId,
+      input.model_type,
+      nextId,
+      input.forecast_start,
+      input.forecast_end,
+    )
     store.addForecast(detail)
     return detail.forecast
   }
@@ -323,75 +345,6 @@ export async function runForecast(
     input,
   )
   return data.data.forecast
-}
-
-export async function runForecastBacktest(
-  datasetId: number,
-  input: ForecastBacktestInput,
-): Promise<ForecastBacktest> {
-  if (isMockMode) {
-    await sleep(420)
-    const store = useMockStore.getState()
-    const payload = buildMockImportedBacktest(datasetId, input.model_type)
-    store.upsertBacktest(payload)
-    return payload
-  }
-
-  const { data } = await http.post<ApiEnvelope<ForecastBacktest>>(
-    `/datasets/${datasetId}/forecasts/backtest`,
-    input,
-  )
-  return data.data
-}
-
-export async function fetchLlmConfigs(): Promise<LlmConfig[]> {
-  if (isMockMode) {
-    await sleep()
-    return useMockStore.getState().llmConfigs
-  }
-
-  const { data } = await http.get<ApiEnvelope<{ items: LlmConfig[] }>>('/llm-configs')
-  return data.data.items
-}
-
-export async function createLlmConfig(input: LlmConfigInput): Promise<LlmConfig> {
-  if (isMockMode) {
-    await sleep(240)
-    return useMockStore.getState().createLlmConfig(input)
-  }
-
-  const { data } = await http.post<ApiEnvelope<LlmConfig>>('/llm-configs', input)
-  return data.data
-}
-
-export async function updateLlmConfig(id: number, input: LlmConfigInput): Promise<LlmConfig> {
-  if (isMockMode) {
-    await sleep(240)
-    return useMockStore.getState().updateLlmConfig(id, input)
-  }
-
-  const { data } = await http.put<ApiEnvelope<LlmConfig>>(`/llm-configs/${id}`, input)
-  return data.data
-}
-
-export async function deleteLlmConfig(id: number): Promise<void> {
-  if (isMockMode) {
-    await sleep(180)
-    useMockStore.getState().deleteLlmConfig(id)
-    return
-  }
-
-  await http.delete(`/llm-configs/${id}`)
-}
-
-export async function setDefaultLlmConfig(id: number): Promise<void> {
-  if (isMockMode) {
-    await sleep(180)
-    useMockStore.getState().setDefaultLlmConfig(id)
-    return
-  }
-
-  await http.post(`/llm-configs/${id}/set-default`)
 }
 
 export async function fetchChatSessions(datasetId: number): Promise<ChatSession[]> {

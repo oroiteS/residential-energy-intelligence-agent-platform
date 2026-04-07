@@ -24,7 +24,7 @@ data:
 model:
   # 输入特征维度，必须与 data.feature_names 长度一致
   input_size: 5
-  # token 隐表示维度
+  # 中间隐藏维度
   d_model: 128
   # Transformer block 层数
   num_layers: 2

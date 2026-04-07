@@ -1,11 +1,10 @@
-@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=IBM+Plex+Sans:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap");
 @import "tailwindcss";
 
 :root {
   color-scheme: light;
-  --font-display: "Cormorant Garamond", "STSong", serif;
-  --font-body: "Manrope", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --font-numeric: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  --font-display: "PingFang SC", "Hiragino Sans GB", "STSong", "SimSun", "Microsoft YaHei", sans-serif;
+  --font-body: "PingFang SC", "Hiragino Sans GB", "STSong", "SimSun", "Microsoft YaHei", sans-serif;
+  --font-numeric: "PingFang SC", "Hiragino Sans GB", "STSong", "SimSun", "Microsoft YaHei", sans-serif;
   --bg-canvas: #f2eee7;
   --bg-canvas-deep: #e8e2d8;
   --bg-panel: rgba(251, 248, 242, 0.84);
@@ -54,7 +53,8 @@ body {
     radial-gradient(circle at 85% 15%, rgba(108, 123, 105, 0.12), transparent 24%),
     linear-gradient(180deg, var(--bg-canvas) 0%, var(--bg-canvas-deep) 100%);
   font-family: var(--font-body);
-  letter-spacing: -0.01em;
+  font-size: 14px;
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -166,8 +166,7 @@ textarea {
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 .ant-table-wrapper .ant-table-tbody > tr > td {

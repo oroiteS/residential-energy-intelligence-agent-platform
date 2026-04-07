@@ -106,33 +106,6 @@ class ForecastRequest:
 
 
 @dataclass(slots=True)
-class BacktestRequest:
-    model_type: str
-    dataset_id: int
-    backtest_start: str
-    backtest_end: str
-    granularity: str
-    unit: str
-    series: list[TimeSeriesPoint]
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "BacktestRequest":
-        metadata = payload.get("metadata", {}) or {}
-        try:
-            return cls(
-                model_type=str(payload.get("model_type", "lstm")),
-                dataset_id=int(payload["dataset_id"]),
-                backtest_start=str(payload["backtest_start"]),
-                backtest_end=str(payload["backtest_end"]),
-                granularity=str(payload.get("granularity", "15min")),
-                unit=str(metadata.get("unit", "w")),
-                series=_load_series(payload),
-            )
-        except KeyError as exc:
-            raise ValidationError(f"请求缺少字段: {exc.args[0]}") from exc
-
-
-@dataclass(slots=True)
 class AgentHistoryItem:
     role: str
     content: str
@@ -176,4 +149,56 @@ class AgentAskRequest:
             question=question,
             history=[AgentHistoryItem.from_dict(item) for item in history_payload],
             context=context_payload,
+        )
+
+
+@dataclass(slots=True)
+class AgentReportSummaryRequest:
+    dataset_id: int
+    context: dict[str, Any]
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "AgentReportSummaryRequest":
+        context_payload = payload.get("context", {}) or {}
+        if not isinstance(context_payload, dict):
+            raise ValidationError("context 必须是对象")
+
+        return cls(
+            dataset_id=int(payload["dataset_id"]),
+            context=context_payload,
+        )
+
+
+@dataclass(slots=True)
+class PDFRenderRequest:
+    markdown: str
+    title: str
+    author: str
+    date: str
+    theme: str
+    cover: bool
+    toc: bool
+    header_title: str
+    footer_left: str
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "PDFRenderRequest":
+        markdown = str(payload.get("markdown", "")).strip()
+        if not markdown:
+            raise ValidationError("markdown 不能为空")
+
+        title = str(payload.get("title", "")).strip()
+        if not title:
+            raise ValidationError("title 不能为空")
+
+        return cls(
+            markdown=markdown,
+            title=title,
+            author=str(payload.get("author", "")).strip(),
+            date=str(payload.get("date", "")).strip(),
+            theme=str(payload.get("theme", "github-light")).strip() or "github-light",
+            cover=bool(payload.get("cover", False)),
+            toc=bool(payload.get("toc", False)),
+            header_title=str(payload.get("header_title", "")).strip(),
+            footer_left=str(payload.get("footer_left", "")).strip(),
         )
