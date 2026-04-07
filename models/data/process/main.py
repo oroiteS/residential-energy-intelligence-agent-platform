@@ -12,7 +12,7 @@ if __package__ is None or __package__ == "":
 from data.process.classification.builder import build_classification_dataset
 from data.process.common.base import build_base_dataset
 from data.process.forecast.builder import build_forecast_dataset
-from data.process.testing import export_representative_test_samples
+from data.process.testing import export_live_sample, export_representative_test_samples
 
 
 def _parse_csv_set(raw_value: str | None) -> set[str] | None:
@@ -160,8 +160,53 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument(
         "--window-days",
         type=int,
-        default=7,
-        help="每个样本保留的连续天数窗口，默认: %(default)s",
+        default=21,
+        help="每个样本保留的连续天数窗口，支持超过两周，默认: %(default)s",
+    )
+
+    live_parser = subparsers.add_parser(
+        "export-live-sample",
+        help="导出 live 模块使用的独立循环连续窗口样本",
+        description=(
+            "从预测验证集里挑选一段连续窗口样本，"
+            "默认直接输出 21 天数据供 live 模块独立运行。"
+        ),
+    )
+    live_parser.add_argument(
+        "--forecast-config",
+        type=Path,
+        default=Path("forecast/transformer/configs/config.yaml"),
+        help="预测模型配置文件路径，默认: %(default)s",
+    )
+    live_parser.add_argument(
+        "--base-dir",
+        type=Path,
+        default=Path("data/processed/base_15min"),
+        help="基础时序目录，默认: %(default)s",
+    )
+    live_parser.add_argument(
+        "--labels-path",
+        type=Path,
+        default=Path("data/processed/classification/classification_day_labels.csv"),
+        help="分类标签文件路径，默认: %(default)s",
+    )
+    live_parser.add_argument(
+        "--output-path",
+        type=Path,
+        default=Path("../live/data/live_sample.csv"),
+        help="live 连续窗口样本输出路径，默认: %(default)s",
+    )
+    live_parser.add_argument(
+        "--house-id",
+        type=str,
+        default=None,
+        help="目标家庭编号；默认自动挑选标签最完整的验证集家庭",
+    )
+    live_parser.add_argument(
+        "--window-days",
+        type=int,
+        default=21,
+        help="live 样本保留的连续天数窗口，支持超过两周，默认: %(default)s",
     )
 
     all_parser = subparsers.add_parser(
@@ -261,6 +306,25 @@ def main() -> None:
             f"家庭: {exported_samples[0]['house_id']}，"
             f"样本数: {len(exported_samples)}，"
             f"输出目录: {exported_samples[0]['output_dir']}"
+        )
+        return
+
+    if args.command == "export-live-sample":
+        result = export_live_sample(
+            base_dir=args.base_dir,
+            labels_path=args.labels_path,
+            output_path=args.output_path,
+            forecast_config_path=args.forecast_config,
+            house_id=args.house_id,
+            window_days=args.window_days,
+        )
+        print(
+            "已导出 live 连续窗口样本，"
+            f"家庭: {result['house_id']}，"
+            f"场景: {result['scenario_name']}，"
+            f"窗口天数: {result['window_days']}，"
+            f"行数: {result['row_count']}，"
+            f"输出文件: {result['output_path']}"
         )
         return
 

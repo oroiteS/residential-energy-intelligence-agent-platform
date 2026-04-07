@@ -363,7 +363,7 @@ export function ChatPage() {
                 rows={4}
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
-                placeholder="例如：为什么我家夜间负荷偏高？未来一天还有哪些高负荷风险？"
+                placeholder="例如：为什么我家夜间负荷偏高？未来一天还有哪些高负荷风险？…"
               />
 
               <Space wrap>
@@ -391,8 +391,8 @@ export function ChatPage() {
                     <Alert
                       type="warning"
                       showIcon
-                      message="当前回答来自降级模式"
-                      description={answer.error_reason ?? '未返回具体原因'}
+                      message="当前回答为简化结果"
+                      description="部分依据暂不可用，建议结合图表与报告交叉查看。"
                     />
                   ) : null}
 

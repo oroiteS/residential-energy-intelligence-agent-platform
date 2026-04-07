@@ -23,7 +23,7 @@ createRoot(document.getElementById('root')!).render(
           colorBorder: 'rgba(66, 78, 67, 0.16)',
           borderRadius: 22,
           fontFamily:
-            '"Manrope", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
+            '"PingFang SC", "Hiragino Sans GB", "STSong", "SimSun", "Microsoft YaHei", sans-serif',
         },
       }}
     >

@@ -22,9 +22,10 @@ export function TrendChart({
     return <Empty description="暂无曲线数据" />
   }
 
+  const singlePoint = data.length === 1
   const option: EChartsOption = {
     tooltip: {
-      trigger: 'axis',
+      trigger: singlePoint ? 'item' : 'axis',
       valueFormatter: (value) => `${Number(value).toFixed(2)} ${unit}`,
     },
     grid: {
@@ -36,7 +37,7 @@ export function TrendChart({
     },
     xAxis: {
       type: 'category',
-      boundaryGap: false,
+      boundaryGap: singlePoint,
       data: data.map((item) => item.label),
       axisLabel: {
         color: '#6c7468',
@@ -63,20 +64,24 @@ export function TrendChart({
     },
     series: [
       {
-        type: 'line',
-        smooth: true,
-        symbol: 'circle',
+        type: singlePoint ? 'bar' : 'line',
+        smooth: !singlePoint,
+        symbol: singlePoint ? 'none' : 'circle',
         symbolSize: 6,
+        barMaxWidth: 44,
         lineStyle: {
           color: lineColor,
           width: 3,
         },
         itemStyle: {
           color: lineColor,
+          borderRadius: singlePoint ? [10, 10, 0, 0] : 0,
         },
-        areaStyle: {
-          color: `${lineColor}18`,
-        },
+        areaStyle: singlePoint
+          ? undefined
+          : {
+              color: `${lineColor}18`,
+            },
         data: data.map((item) => item.value),
       },
     ],

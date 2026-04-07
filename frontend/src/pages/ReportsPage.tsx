@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   DownloadOutlined,
-  FileExcelOutlined,
+  FilePdfOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
   ReloadOutlined,
@@ -35,6 +35,7 @@ import {
 import type { DatasetSummary, ReportRecord, ReportType } from '@/types/domain'
 import {
   formatDateTime,
+  formatFileLabel,
   formatFileSize,
 } from '@/utils/formatters'
 
@@ -51,7 +52,7 @@ export function ReportsPage() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [exportingDatasetId, setExportingDatasetId] = useState<number | null>(null)
+  const [exportingKey, setExportingKey] = useState<string | null>(null)
   const [datasets, setDatasets] = useState<DatasetSummary[]>([])
   const [reports, setReports] = useState<ReportListItem[]>([])
   const [selectedDatasetId, setSelectedDatasetId] = useState<DatasetFilterValue>('all')
@@ -85,7 +86,7 @@ export function ReportsPage() {
           ),
       )
     } catch {
-      setError('报告中心加载失败，请检查接口状态后重试。')
+      setError('报告中心加载失败，请稍后重试。')
     } finally {
       setLoading(false)
     }
@@ -118,16 +119,16 @@ export function ReportsPage() {
 
   const latestReport = reports[0] ?? null
 
-  const handleExport = async (datasetId: number) => {
-    setExportingDatasetId(datasetId)
+  const handleExport = async (datasetId: number, reportType: ReportType) => {
+    setExportingKey(`${datasetId}-${reportType}`)
     try {
-      await exportDatasetReport(datasetId, 'excel')
-      message.success('Excel 报告已导出并刷新列表。')
+      await exportDatasetReport(datasetId, reportType)
+      message.success(`${reportTypeMap[reportType]}已导出并刷新列表。`)
       await loadPage()
     } catch {
       message.error('导出报告失败，请稍后重试。')
     } finally {
-      setExportingDatasetId(null)
+      setExportingKey(null)
     }
   }
 
@@ -142,9 +143,12 @@ export function ReportsPage() {
       title: '所属数据集',
       dataIndex: 'dataset_name',
       key: 'dataset_name',
+      width: 220,
       render: (_, record) => (
         <Space direction="vertical" size={2}>
-          <Typography.Text strong>{record.dataset_name}</Typography.Text>
+          <Typography.Text strong ellipsis={{ tooltip: record.dataset_name }}>
+            {record.dataset_name}
+          </Typography.Text>
           <Space wrap size={6}>
             <StatusTag status={record.dataset_status} />
             {record.household_id ? <Typography.Text type="secondary">{record.household_id}</Typography.Text> : null}
@@ -162,9 +166,15 @@ export function ReportsPage() {
     {
       title: '文件信息',
       key: 'file',
+      width: 260,
       render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text>{record.file_path}</Typography.Text>
+        <Space direction="vertical" size={2} className="reports-page__file-meta">
+          <Typography.Text
+            className="reports-page__file-label"
+            ellipsis={{ tooltip: formatFileLabel(record.file_path) }}
+          >
+            {formatFileLabel(record.file_path)}
+          </Typography.Text>
           <Typography.Text type="secondary">
             {formatFileSize(record.file_size)}
           </Typography.Text>
@@ -207,14 +217,14 @@ export function ReportsPage() {
       <PageHero
         eyebrow="报告中心"
         title="统一查看导出记录与下载入口"
-        description="这里聚合所有数据集的 Excel 报告记录，方便集中导出、筛选和回到对应数据集详情页继续分析。"
+        description="集中查看 PDF 导出记录，并快速回到对应数据集继续分析。"
         icon={<FileTextOutlined />}
         extra={
           <div className="hero-side-card">
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
-              <Typography.Text strong>当前导出口径</Typography.Text>
+              <Typography.Text strong>导出概览</Typography.Text>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                当前后端只开放 Excel 报告导出与下载，列表页按真实能力收敛展示。
+                当前统一保留 PDF 导出，便于归档、分享与承载更自由的报告内容。
               </Typography.Paragraph>
               <Button icon={<ReloadOutlined />} onClick={() => void loadPage()}>
                 刷新报告列表
@@ -231,9 +241,9 @@ export function ReportsPage() {
             accent="teal"
           />
           <MetricCard
-            label="Excel 报告"
-            value={String(reports.filter((item) => item.report_type === 'excel').length)}
-            accent="olive"
+            label="PDF 报告"
+            value={String(reports.filter((item) => item.report_type === 'pdf').length)}
+            accent="teal"
           />
           <MetricCard
             label="最近导出"
@@ -261,7 +271,7 @@ export function ReportsPage() {
         <Col xs={24} xl={16}>
           <SectionCard
             title="报告列表"
-            subtitle="支持按数据集和报告类型过滤，并直接触发下载。"
+            subtitle="支持按数据集和报告类型筛选，并直接下载。"
             extra={
               <Space wrap>
                 <Select<DatasetFilterValue>
@@ -281,7 +291,7 @@ export function ReportsPage() {
                   style={{ width: 160 }}
                   options={[
                     { label: '全部类型', value: 'all' },
-                    { label: 'Excel 报告', value: 'excel' },
+                    { label: 'PDF 报告', value: 'pdf' },
                   ]}
                   onChange={setSelectedReportType}
                 />
@@ -289,10 +299,13 @@ export function ReportsPage() {
             }
           >
             <Table
+              className="reports-page__table"
               rowKey="id"
               loading={loading}
               columns={columns}
               dataSource={filteredReports}
+              tableLayout="fixed"
+              scroll={{ x: 980 }}
               locale={{
                 emptyText: loading ? '正在加载报告…' : <Empty description="暂无匹配的报告记录" />,
               }}
@@ -304,7 +317,8 @@ export function ReportsPage() {
         <Col xs={24} xl={8}>
           <SectionCard
             title="快速导出"
-            subtitle="只对已就绪的数据集开放导出，避免在处理中样本上触发无效操作。"
+            subtitle="仅对已完成处理的数据集开放导出。"
+            className="reports-page__quick-export"
           >
             <List
               dataSource={readyDatasets}
@@ -313,13 +327,13 @@ export function ReportsPage() {
                 <List.Item
                   actions={[
                     <Button
-                      key="export"
+                      key="export-pdf"
                       type="primary"
-                      icon={<FileExcelOutlined />}
-                      loading={exportingDatasetId === dataset.id}
-                      onClick={() => void handleExport(dataset.id)}
+                      icon={<FilePdfOutlined />}
+                      loading={exportingKey === `${dataset.id}-pdf`}
+                      onClick={() => void handleExport(dataset.id, 'pdf')}
                     >
-                      导出 Excel
+                      导出 PDF
                     </Button>,
                   ]}
                 >

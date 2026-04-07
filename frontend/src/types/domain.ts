@@ -31,7 +31,6 @@ export type SystemConfig = {
   energy_advice_prompt_template: string
   data_upload_dir: string
   report_output_dir: string
-  default_llm_id: number | null
 }
 
 export type SystemConfigPatchInput = Partial<
@@ -202,33 +201,6 @@ export type ForecastDetail = {
   series: ForecastSeriesPoint[]
 }
 
-export type BacktestMetrics = {
-  mae: number
-  rmse: number
-  smape: number
-  wape: number
-}
-
-export type BacktestSummary = {
-  dataset_id: number
-  model_type: ForecastModelType
-  backtest_start: string
-  backtest_end: string
-  granularity: string
-  metrics: BacktestMetrics
-}
-
-export type BacktestPoint = {
-  timestamp: string
-  actual: number
-  predicted: number
-}
-
-export type ForecastBacktest = {
-  backtest: BacktestSummary
-  predictions: BacktestPoint[]
-}
-
 export type AdviceSummary = {
   id: number
   dataset_id: number
@@ -258,28 +230,6 @@ export type ReportRecord = {
   file_path: string
   file_size: number
   created_at: string
-}
-
-export type LlmConfig = {
-  id: number
-  name: string
-  base_url: string
-  model_name: string
-  temperature: number
-  timeout_seconds: number
-  is_default: boolean
-  created_at: string
-  updated_at: string
-}
-
-export type LlmConfigInput = {
-  name: string
-  base_url: string
-  api_key: string
-  model_name: string
-  temperature: number
-  timeout_seconds: number
-  is_default: boolean
 }
 
 export type ChatSession = {
@@ -338,11 +288,4 @@ export type ForecastPredictInput = {
   forecast_start: string
   forecast_end: string
   force_refresh: boolean
-}
-
-export type ForecastBacktestInput = {
-  model_type: ForecastModelType
-  granularity: string
-  backtest_start: string
-  backtest_end: string
 }

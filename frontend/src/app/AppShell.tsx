@@ -4,13 +4,12 @@ import {
   ControlOutlined,
   DeploymentUnitOutlined,
   FileTextOutlined,
+  FundProjectionScreenOutlined,
   MenuOutlined,
   RobotOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { Button, Drawer, Grid, Layout, Menu, Typography } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { getRuntimeModeLabel, isMockMode } from '@/services/dashboard'
 
 const { Header, Content, Sider } = Layout
 const { useBreakpoint } = Grid
@@ -24,12 +23,17 @@ const menuItems = [
   {
     key: '/chat',
     icon: <RobotOutlined />,
-    label: '智能问答',
+    label: '节能问答',
   },
   {
-    key: '/settings',
+    key: '/overview',
     icon: <ControlOutlined />,
-    label: '系统状态',
+    label: '服务概览',
+  },
+  {
+    key: '/live',
+    icon: <FundProjectionScreenOutlined />,
+    label: '实时演示',
   },
   {
     key: '/reports',
@@ -39,11 +43,11 @@ const menuItems = [
 ]
 
 const titleMap: Record<string, string> = {
-  '/datasets': '数据集与分析仪表盘',
-  '/chat': '智能问答工作台',
-  '/settings': '系统运行状态',
-  '/reports': '报告导出与下载中心',
-  '/llm-configs': 'LLM 配置管理',
+  '/datasets': '数据集中心',
+  '/chat': '节能问答',
+  '/overview': '服务概览',
+  '/live': '实时演示',
+  '/reports': '报告中心',
 }
 
 export function AppShell({ children }: PropsWithChildren) {
@@ -55,8 +59,7 @@ export function AppShell({ children }: PropsWithChildren) {
 
   const selectedKey = menuItems.find((item) => location.pathname.startsWith(item.key))?.key ?? '/datasets'
   const titleKey = Object.keys(titleMap).find((item) => location.pathname.startsWith(item))
-  const runtimeLabel = getRuntimeModeLabel()
-  const currentTitle = titleMap[titleKey ?? selectedKey] ?? '前端控制台'
+  const currentTitle = titleMap[titleKey ?? selectedKey] ?? 'Energy Canvas'
 
   const handleNavigate = (key: string) => {
     navigate(key)
@@ -71,15 +74,15 @@ export function AppShell({ children }: PropsWithChildren) {
         </div>
         <Typography.Text className="brand-block__eyebrow">居民用电分析</Typography.Text>
         <Typography.Title className="brand-block__title" level={3}>
-          Energy Canvas
+          居民用电工作台
         </Typography.Title>
         <Typography.Paragraph className="brand-block__desc">
-          本地部署的居民用电分析台。
+          围绕数据接入、负荷洞察、预测与节能建议的统一工作区。
         </Typography.Paragraph>
         <div className="brand-block__chips">
-          <span className={`brand-chip ${isMockMode ? 'brand-chip--soft' : 'brand-chip--accent'}`}>
-            {runtimeLabel}
-          </span>
+          <span className="brand-chip brand-chip--accent">分析</span>
+          <span className="brand-chip">预测</span>
+          <span className="brand-chip brand-chip--soft">问答</span>
         </div>
       </div>
 
@@ -91,10 +94,6 @@ export function AppShell({ children }: PropsWithChildren) {
         onClick={({ key }) => handleNavigate(String(key))}
       />
 
-      <div className="sider-tip">
-        <ThunderboltOutlined />
-        <span>导航保持收敛，只保留分析流程里真正高频的入口。</span>
-      </div>
     </div>
   )
 
@@ -124,12 +123,13 @@ export function AppShell({ children }: PropsWithChildren) {
               {!isDesktop ? (
                 <Button
                   className="app-shell__menu-button"
+                  aria-label="打开导航菜单"
                   icon={<MenuOutlined />}
                   onClick={() => setMobileNavOpen(true)}
                 />
               ) : null}
               <Typography.Text className="app-shell__header-label">
-                当前路径
+                工作区
               </Typography.Text>
               <span className="app-shell__header-separator">/</span>
               <Typography.Title className="app-shell__header-title" level={4}>

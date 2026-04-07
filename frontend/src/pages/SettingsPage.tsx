@@ -9,19 +9,16 @@ import {
   Alert,
   Button,
   Col,
+  Divider,
   List,
   Row,
-  Spin,
+  Space,
   Typography,
 } from 'antd'
 import { PageHero } from '@/components/common/PageHero'
 import { SectionCard } from '@/components/common/SectionCard'
 import { MetricCard } from '@/components/sections/MetricCard'
-import {
-  fetchHealth,
-  getRuntimeModeLabel,
-  isMockMode,
-} from '@/services/dashboard'
+import { fetchHealth } from '@/services/dashboard'
 import type { HealthStatus } from '@/types/domain'
 
 function getHealthStatusLabel(status: HealthStatus['status']) {
@@ -60,7 +57,7 @@ export function SettingsPage() {
       const healthResult = await fetchHealth()
       setHealth(healthResult)
     } catch {
-      setError('系统状态加载失败，请稍后重试。')
+      setError('服务概览加载失败，请稍后重试。')
     } finally {
       setLoading(false)
     }
@@ -70,63 +67,50 @@ export function SettingsPage() {
     void loadPage()
   }, [loadPage])
 
-  if (loading) {
-    return (
-      <div className="page-state">
-        <Spin size="large" />
-      </div>
-    )
-  }
+  const dependencyEntries = Object.entries(health?.dependencies ?? {})
+  const degradedCount = dependencyEntries.filter(([, status]) => status !== 'up').length
 
-  if (error || !health) {
-    return (
-      <div className="page-state">
+  return (
+    <div className="page-stack">
+      <PageHero
+        eyebrow="服务概览"
+        title="查看服务状态与关键入口"
+        description="这里统一展示主系统依赖健康度，并提供实时演示模块的固定访问入口。即使健康检查暂时失败，页面本身也应保持可打开。"
+        icon={<CheckCircleOutlined />}
+        extra={
+          <div className="hero-side-card">
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Button icon={<ReloadOutlined />} onClick={() => void loadPage()}>
+                刷新概览
+              </Button>
+              <Typography.Text type="secondary">
+                {loading ? '正在刷新服务状态…' : '页面已加载，可继续操作。'}
+              </Typography.Text>
+            </Space>
+          </div>
+        }
+      />
+
+      {error ? (
         <Alert
-          type="error"
+          type="warning"
           showIcon
-          message={error ?? '状态页暂不可用'}
+          message={error}
+          description="已回退到静态概览视图。你仍然可以访问其他页面和实时演示模块。"
           action={
             <Button size="small" onClick={() => void loadPage()}>
               重试
             </Button>
           }
         />
-      </div>
-    )
-  }
-
-  const dependencyEntries = Object.entries(health.dependencies ?? {})
-
-  return (
-    <div className="page-stack">
-      <PageHero
-        eyebrow="系统状态"
-        title="只展示当前可感知的运行状态"
-        description="这里不再暴露模型窗口、提示词、目录等内部参数，只保留用户真正需要知道的服务状态。"
-        icon={<CheckCircleOutlined />}
-        extra={
-          <div className="hero-side-card">
-            <Typography.Text strong>当前模式</Typography.Text>
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-              {getRuntimeModeLabel()}
-            </Typography.Paragraph>
-            <Button icon={<ReloadOutlined />} onClick={() => void loadPage()}>
-              刷新状态
-            </Button>
-          </div>
-        }
-      >
-        <span className={isMockMode ? 'ant-tag tone-tag tone-tag--warm' : 'ant-tag tone-tag tone-tag--accent'}>
-          {getRuntimeModeLabel()}
-        </span>
-      </PageHero>
+      ) : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8}>
           <MetricCard
             label="服务状态"
-            value={getHealthStatusLabel(health.status)}
-            hint={`${health.service}${health.version ? ` · ${health.version}` : ''}`}
+            value={health ? getHealthStatusLabel(health.status) : '--'}
+            hint="当前平台整体可用性"
             accent="teal"
             icon={<CheckCircleOutlined />}
           />
@@ -135,7 +119,7 @@ export function SettingsPage() {
           <MetricCard
             label="依赖数量"
             value={String(dependencyEntries.length)}
-            hint="当前健康检查覆盖的服务"
+            hint="已纳入健康检查的服务"
             accent="amber"
             icon={<ClusterOutlined />}
           />
@@ -143,8 +127,8 @@ export function SettingsPage() {
         <Col xs={24} md={8}>
           <MetricCard
             label="异常依赖"
-            value={String(dependencyEntries.filter(([, status]) => status !== 'up').length)}
-            hint="包含降级与不可用"
+            value={String(degradedCount)}
+            hint="需要优先关注的依赖项"
             accent="coral"
             icon={<WarningOutlined />}
           />
@@ -152,8 +136,28 @@ export function SettingsPage() {
       </Row>
 
       <SectionCard
-        title="依赖服务状态"
-        subtitle="用于快速判断当前系统是否能正常完成分析、预测和智能问答。"
+        title="常用入口"
+        subtitle="减少来回查找页面的成本。"
+      >
+        <div className="overview-links">
+          <a className="overview-link-card" href="/datasets">
+            <strong>数据集中心</strong>
+            <span>导入数据、查看分析、运行分类与预测。</span>
+          </a>
+          <a className="overview-link-card" href="/reports">
+            <strong>报告中心</strong>
+            <span>统一查看 PDF 导出记录，避免手动翻找文件。</span>
+          </a>
+          <a className="overview-link-card" href="/live">
+            <strong>实时演示</strong>
+            <span>进入独立实时用电界面，查看循环周样本与动态预测。</span>
+          </a>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="依赖健康度"
+        subtitle="帮助判断当前是否适合继续分析、预测与问答。"
       >
         <List
           dataSource={dependencyEntries}
@@ -169,6 +173,14 @@ export function SettingsPage() {
             </List.Item>
           )}
         />
+        {!dependencyEntries.length ? (
+          <>
+            <Divider />
+            <Typography.Text type="secondary">
+              当前未获取到依赖健康数据。通常是后端尚未启动，或 `/api/v1/health` 暂时不可用。
+            </Typography.Text>
+          </>
+        ) : null}
       </SectionCard>
     </div>
   )

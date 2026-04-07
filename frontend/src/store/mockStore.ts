@@ -3,7 +3,6 @@ import {
   buildMockAssistantExchange,
   demoAdvices,
   demoAnalyses,
-  demoBacktests,
   demoChatMessages,
   demoChatSessions,
   demoClassifications,
@@ -11,7 +10,6 @@ import {
   demoDatasets,
   demoForecastDetails,
   demoForecasts,
-  demoLlmConfigs,
   demoReports,
   demoSystemConfig,
 } from '@/mocks/demoData'
@@ -19,10 +17,7 @@ import type {
   AnalysisPayload,
   ChatSession,
   DatasetDetailPayload,
-  ForecastBacktest,
   ForecastDetail,
-  LlmConfig,
-  LlmConfigInput,
   ReportRecord,
   SystemConfig,
   SystemConfigPatchInput,
@@ -37,20 +32,13 @@ type MockStore = {
   reports: Record<number, ReportRecord[]>
   forecasts: Record<number, typeof demoForecasts[number]>
   forecastDetails: Record<number, ForecastDetail>
-  backtests: Record<string, ForecastBacktest>
   systemConfig: SystemConfig
-  llmConfigs: LlmConfig[]
   chatSessions: Record<number, ChatSession[]>
   chatMessages: typeof demoChatMessages
   addDataset: (detail: DatasetDetailPayload, analysis: AnalysisPayload) => void
   addForecast: (detail: ForecastDetail) => void
-  upsertBacktest: (payload: ForecastBacktest) => void
   addReport: (report: ReportRecord) => void
   updateSystemConfig: (input: SystemConfigPatchInput) => SystemConfig
-  createLlmConfig: (input: LlmConfigInput) => LlmConfig
-  updateLlmConfig: (id: number, input: LlmConfigInput) => LlmConfig
-  deleteLlmConfig: (id: number) => void
-  setDefaultLlmConfig: (id: number) => void
   createChatSession: (datasetId: number, title: string) => ChatSession
   appendChatExchange: (
     datasetId: number,
@@ -72,9 +60,7 @@ export const useMockStore = create<MockStore>((set, get) => ({
   reports: demoReports,
   forecasts: demoForecasts,
   forecastDetails: demoForecastDetails,
-  backtests: demoBacktests,
   systemConfig: demoSystemConfig,
-  llmConfigs: demoLlmConfigs,
   chatSessions: demoChatSessions,
   chatMessages: demoChatMessages,
   addDataset: (detail, analysis) =>
@@ -98,13 +84,6 @@ export const useMockStore = create<MockStore>((set, get) => ({
       forecastDetails: {
         ...state.forecastDetails,
         [detail.forecast.id]: detail,
-      },
-    })),
-  upsertBacktest: (payload) =>
-    set((state) => ({
-      backtests: {
-        ...state.backtests,
-        [`${payload.backtest.dataset_id}:${payload.backtest.model_type}`]: payload,
       },
     })),
   addReport: (report) =>
@@ -140,74 +119,6 @@ export const useMockStore = create<MockStore>((set, get) => ({
 
     return get().systemConfig
   },
-  createLlmConfig: (input) => {
-    const nextId = getNextId(get().llmConfigs.map((item) => item.id))
-    const timestamp = '2026-04-01T11:10:00+08:00'
-    const record: LlmConfig = {
-      id: nextId,
-      name: input.name,
-      base_url: input.base_url,
-      model_name: input.model_name,
-      temperature: input.temperature,
-      timeout_seconds: input.timeout_seconds,
-      is_default: input.is_default,
-      created_at: timestamp,
-      updated_at: timestamp,
-    }
-
-    set((state) => ({
-      llmConfigs: state.llmConfigs.map((item) => ({
-        ...item,
-        is_default: input.is_default ? false : item.is_default,
-      })).concat(record),
-    }))
-
-    return record
-  },
-  updateLlmConfig: (id, input) => {
-    const timestamp = '2026-04-01T11:16:00+08:00'
-    let updatedRecord: LlmConfig | null = null
-
-    set((state) => ({
-      llmConfigs: state.llmConfigs.map((item) => {
-        if (item.id === id) {
-          updatedRecord = {
-            ...item,
-            name: input.name,
-            base_url: input.base_url,
-            model_name: input.model_name,
-            temperature: input.temperature,
-            timeout_seconds: input.timeout_seconds,
-            is_default: input.is_default,
-            updated_at: timestamp,
-          }
-          return updatedRecord
-        }
-
-        return {
-          ...item,
-          is_default: input.is_default ? false : item.is_default,
-        }
-      }),
-    }))
-
-    if (!updatedRecord) {
-      throw new Error('LLM_CONFIG_NOT_FOUND')
-    }
-
-    return updatedRecord
-  },
-  deleteLlmConfig: (id) =>
-    set((state) => ({
-      llmConfigs: state.llmConfigs.filter((item) => item.id !== id),
-    })),
-  setDefaultLlmConfig: (id) =>
-    set((state) => ({
-      llmConfigs: state.llmConfigs.map((item) => ({
-        ...item,
-        is_default: item.id === id,
-      })),
-    })),
   createChatSession: (datasetId, title) => {
     const nextId = getNextId(
       Object.values(get().chatSessions)

@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ArrowLeftOutlined,
   DownloadOutlined,
-  FileExcelOutlined,
-  HistoryOutlined,
+  FilePdfOutlined,
   LineChartOutlined,
   RocketOutlined,
   RobotOutlined,
@@ -26,7 +25,6 @@ import {
   message,
 } from 'antd'
 import { useNavigate, useParams } from 'react-router-dom'
-import { CompareTrendChart } from '@/components/charts/CompareTrendChart'
 import { PeakRatioChart } from '@/components/charts/PeakRatioChart'
 import { TrendChart } from '@/components/charts/TrendChart'
 import { PageHero } from '@/components/common/PageHero'
@@ -42,6 +40,7 @@ import {
 } from '@/constants/display'
 import {
   downloadReport,
+  extractApiErrorMessage,
   exportDatasetReport,
   fetchAdvices,
   fetchDatasetAnalysis,
@@ -53,21 +52,21 @@ import {
   generateAdvices,
   runClassification,
   runForecast,
-  runForecastBacktest,
 } from '@/services/dashboard'
 import type {
   AdviceDetail,
   AnalysisPayload,
   ClassificationResult,
   DatasetDetailPayload,
-  ForecastBacktest,
   ForecastDetail,
   ForecastModelType,
   ForecastRecord,
   ReportRecord,
+  ReportType,
 } from '@/types/domain'
 import {
   formatDateTime,
+  formatFileLabel,
   formatFileSize,
   formatNumber,
   formatPercent,
@@ -75,8 +74,9 @@ import {
   formatTime,
 } from '@/utils/formatters'
 
-function buildDayWindow(timeEnd: string | null | undefined) {
+function buildDayWindow(timeEnd: string | null | undefined, dayOffset = 0) {
   const baseDate = timeEnd ? new Date(timeEnd) : new Date('2014-12-04T23:45:00+08:00')
+  baseDate.setDate(baseDate.getDate() + dayOffset)
   const year = baseDate.getFullYear()
   const month = String(baseDate.getMonth() + 1).padStart(2, '0')
   const day = String(baseDate.getDate()).padStart(2, '0')
@@ -86,6 +86,47 @@ function buildDayWindow(timeEnd: string | null | undefined) {
     start: `${dayKey}T00:00:00+08:00`,
     end: `${dayKey}T23:45:00+08:00`,
   }
+}
+
+function getForecastDayOffset(
+  forecastStart: string | null | undefined,
+  datasetTimeEnd: string | null | undefined,
+) {
+  if (!forecastStart || !datasetTimeEnd) {
+    return null
+  }
+
+  const forecastDate = new Date(forecastStart)
+  const datasetDate = new Date(datasetTimeEnd)
+  const dayStartForecast = new Date(
+    forecastDate.getFullYear(),
+    forecastDate.getMonth(),
+    forecastDate.getDate(),
+  )
+  const dayStartDataset = new Date(
+    datasetDate.getFullYear(),
+    datasetDate.getMonth(),
+    datasetDate.getDate(),
+  )
+  const dayOffset = Math.round(
+    (dayStartForecast.getTime() - dayStartDataset.getTime()) / (24 * 60 * 60 * 1000),
+  )
+
+  if (dayOffset < 1 || dayOffset > 3) {
+    return null
+  }
+  return dayOffset
+}
+
+function getForecastDayLabel(
+  forecastStart: string | null | undefined,
+  datasetTimeEnd: string | null | undefined,
+) {
+  const dayOffset = getForecastDayOffset(forecastStart, datasetTimeEnd)
+  if (dayOffset === null) {
+    return '历史记录'
+  }
+  return `未来第 ${dayOffset} 天`
 }
 
 export function DatasetDetailPage() {
@@ -108,8 +149,8 @@ export function DatasetDetailPage() {
   const [forecasts, setForecasts] = useState<ForecastRecord[]>([])
   const [activeForecastId, setActiveForecastId] = useState<number | null>(null)
   const [forecastDetail, setForecastDetail] = useState<ForecastDetail | null>(null)
-  const [backtest, setBacktest] = useState<ForecastBacktest | null>(null)
-  const [selectedModel, setSelectedModel] = useState<ForecastModelType>('lstm')
+  const [selectedForecastModel, setSelectedForecastModel] = useState<ForecastModelType>('lstm')
+  const [selectedFutureDay, setSelectedFutureDay] = useState(1)
 
   const loadDetail = useCallback(async () => {
     if (!Number.isFinite(datasetId)) {
@@ -131,7 +172,7 @@ export function DatasetDetailPage() {
         setReports([])
         setForecasts([])
         setActiveForecastId(null)
-        setSelectedModel('lstm')
+        setSelectedForecastModel('lstm')
         return
       }
 
@@ -155,7 +196,7 @@ export function DatasetDetailPage() {
       setReports(reportResult)
       setForecasts(forecastResult)
       setActiveForecastId(forecastResult[0]?.id ?? null)
-      setSelectedModel(forecastResult[0]?.model_type ?? 'lstm')
+      setSelectedForecastModel(forecastResult[0]?.model_type ?? 'lstm')
     } catch {
       setError('数据集详情加载失败，请稍后重试。')
     } finally {
@@ -182,9 +223,9 @@ export function DatasetDetailPage() {
         if (active) {
           setForecastDetail(result)
         }
-      } catch {
+      } catch (error) {
         if (active) {
-          message.error('预测详情加载失败。')
+          message.error(extractApiErrorMessage(error, '预测详情加载失败。'))
         }
       } finally {
         if (active) {
@@ -201,16 +242,16 @@ export function DatasetDetailPage() {
   }, [activeForecastId])
 
   useEffect(() => {
-    const forecastOfSelectedModel = forecasts.find(
-      (item) => item.model_type === selectedModel,
+    const visibleForecast = forecasts.find((item) =>
+      getForecastDayOffset(item.forecast_start, detail?.dataset.time_end ?? null) !== null,
     )
-    if (!forecastOfSelectedModel) {
+    if (!visibleForecast) {
       return
     }
-    if (forecastOfSelectedModel.id !== activeForecastId) {
-      setActiveForecastId(forecastOfSelectedModel.id)
+    if (!activeForecastId || !forecasts.some((item) => item.id === activeForecastId && getForecastDayOffset(item.forecast_start, detail?.dataset.time_end ?? null) !== null)) {
+      setActiveForecastId(visibleForecast.id)
     }
-  }, [activeForecastId, forecasts, selectedModel])
+  }, [activeForecastId, detail?.dataset.time_end, forecasts])
 
   const refreshForecasts = async () => {
     const items = await fetchForecasts(datasetId)
@@ -224,7 +265,26 @@ export function DatasetDetailPage() {
     return result
   }
 
-  const selectedForecast = forecasts.find((item) => item.id === activeForecastId) ?? null
+  const visibleForecasts = forecasts.filter(
+    (item) => getForecastDayOffset(item.forecast_start, detail?.dataset.time_end ?? null) !== null,
+  ).sort((left, right) => {
+    const leftOffset =
+      getForecastDayOffset(left.forecast_start, detail?.dataset.time_end ?? null) ?? 99
+    const rightOffset =
+      getForecastDayOffset(right.forecast_start, detail?.dataset.time_end ?? null) ?? 99
+    if (leftOffset !== rightOffset) {
+      return leftOffset - rightOffset
+    }
+    return new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+  })
+  const selectedForecast = visibleForecasts.find((item) => item.id === activeForecastId) ?? null
+  const weeklyTrendChartData =
+    analysis && analysis.charts.weekly_trend.length >= 2
+      ? analysis.charts.weekly_trend.map((item) => ({
+          label: `${item.week_start.slice(5)} ~ ${item.week_end.slice(5)}`,
+          value: item.kwh,
+        }))
+      : []
 
   if (loading) {
     return (
@@ -262,22 +322,22 @@ export function DatasetDetailPage() {
   )
   const datasetReady = detail.dataset.status === 'ready'
   const handleGenerateForecast = async () => {
-    const window = buildDayWindow(detail.dataset.time_end)
+    const window = buildDayWindow(detail.dataset.time_end, selectedFutureDay)
     setForecastActionLoading(true)
     try {
       const result = await runForecast(datasetId, {
-        model_type: selectedModel,
+        model_type: selectedForecastModel,
         granularity: '15min',
         forecast_start: window.start,
         forecast_end: window.end,
         force_refresh: true,
       })
       const nextForecasts = await refreshForecasts()
-      setSelectedModel(result.model_type)
+      setSelectedForecastModel(result.model_type)
       setActiveForecastId(result.id ?? nextForecasts[0]?.id ?? null)
       message.success('预测任务已完成并刷新展示。')
-    } catch {
-      message.error('生成预测失败，请稍后重试。')
+    } catch (error) {
+      message.error(extractApiErrorMessage(error, '生成预测失败，请稍后重试。'))
     } finally {
       setForecastActionLoading(false)
     }
@@ -289,8 +349,8 @@ export function DatasetDetailPage() {
       const result = await runClassification(datasetId)
       setClassification(result)
       message.success('行为分类结果已刷新。')
-    } catch {
-      message.error('生成分类结果失败，请稍后重试。')
+    } catch (error) {
+      message.error(extractApiErrorMessage(error, '生成分类结果失败，请稍后重试。'))
     } finally {
       setClassificationActionLoading(false)
     }
@@ -302,40 +362,21 @@ export function DatasetDetailPage() {
       await generateAdvices(datasetId)
       await refreshAdvices()
       message.success('规则建议已生成。')
-    } catch {
-      message.error('生成规则建议失败，请稍后重试。')
+    } catch (error) {
+      message.error(extractApiErrorMessage(error, '生成规则建议失败，请稍后重试。'))
     } finally {
       setAdviceActionLoading(false)
     }
   }
 
-  const handleRunBacktest = async () => {
-    const window = buildDayWindow(selectedForecast?.forecast_end ?? detail.dataset.time_end)
-    setForecastActionLoading(true)
-    try {
-      const result = await runForecastBacktest(datasetId, {
-        model_type: selectedModel,
-        granularity: '15min',
-        backtest_start: window.start,
-        backtest_end: window.end,
-      })
-      setBacktest(result)
-      message.success('回测结果已生成。')
-    } catch {
-      message.error('回测失败，请稍后重试。')
-    } finally {
-      setForecastActionLoading(false)
-    }
-  }
-
-  const handleExportReport = async () => {
+  const handleExportReport = async (reportType: ReportType) => {
     setReportActionLoading(true)
     try {
-      await exportDatasetReport(datasetId, 'excel')
+      await exportDatasetReport(datasetId, reportType)
       setReports(await fetchReports(datasetId))
-      message.success('报告导出任务已创建。')
-    } catch {
-      message.error('导出报告失败。')
+      message.success(`${reportTypeMap[reportType]}导出任务已创建。`)
+    } catch (error) {
+      message.error(extractApiErrorMessage(error, '导出报告失败。'))
     } finally {
       setReportActionLoading(false)
     }
@@ -389,7 +430,7 @@ export function DatasetDetailPage() {
               }
               description={
                 detail.dataset.error_message ??
-                '统计分析、分类、预测和报告会在数据集处理完成后开放。'
+                '分析、分类、预测和报告会在处理完成后开放查看。'
               }
             />
           </Col>
@@ -444,7 +485,7 @@ export function DatasetDetailPage() {
               <div className="page-stack">
                 <SectionCard
                   title="数据质量摘要"
-                  subtitle="导入后自动生成，前端直接展示摘要信息即可"
+                  subtitle="帮助快速判断样本完整性与清洗情况"
                 >
                     <Descriptions column={{ xs: 1, lg: 2 }} size="small">
                       <Descriptions.Item label="缺失率">
@@ -457,9 +498,6 @@ export function DatasetDetailPage() {
                       </Descriptions.Item>
                       <Descriptions.Item label="采样间隔">
                         {detail.quality_summary?.sampling_interval ?? '--'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="质量报告路径">
-                        {detail.dataset.quality_report_path ?? '--'}
                       </Descriptions.Item>
                       <Descriptions.Item label="清洗策略" span={2}>
                         {detail.quality_summary?.cleaning_strategies?.length ? (
@@ -477,7 +515,7 @@ export function DatasetDetailPage() {
 
                 <Row gutter={[16, 16]}>
                   <Col xs={24} xl={12}>
-                    <SectionCard title="按日趋势" subtitle="后端直接返回图表数据，无需前端再聚合">
+                    <SectionCard title="按日趋势" subtitle="查看每日用电变化节奏">
                       <TrendChart
                         data={analysis.charts.daily_trend.map((item) => ({
                           label: item.date.slice(5),
@@ -488,14 +526,15 @@ export function DatasetDetailPage() {
                     </SectionCard>
                   </Col>
                   <Col xs={24} xl={12}>
-                    <SectionCard title="按周趋势" subtitle="用于观察跨周波动与整体负荷走向">
-                      <TrendChart
-                        data={analysis.charts.weekly_trend.map((item) => ({
-                          label: item.week_start.slice(5),
-                          value: item.kwh,
-                        }))}
-                        lineColor="#5d6d5e"
-                      />
+                    <SectionCard title="按周趋势" subtitle="用于观察跨周波动与整体走势">
+                      {weeklyTrendChartData.length >= 2 ? (
+                        <TrendChart
+                          data={weeklyTrendChartData}
+                          lineColor="#5d6d5e"
+                        />
+                      ) : (
+                        <Empty description="样本不足两周，暂不展示按周趋势" />
+                      )}
                     </SectionCard>
                   </Col>
                   <Col xs={24} xl={14}>
@@ -511,7 +550,7 @@ export function DatasetDetailPage() {
                     </SectionCard>
                   </Col>
                   <Col xs={24} xl={10}>
-                    <SectionCard title="峰谷平占比" subtitle="当前峰谷配置由系统配置决定">
+                    <SectionCard title="峰谷平占比" subtitle="从时段结构理解用电分布">
                       <PeakRatioChart data={analysis.charts.peak_valley_pie} />
                       <Descriptions column={1} size="small">
                         <Descriptions.Item label="峰时">
@@ -536,7 +575,7 @@ export function DatasetDetailPage() {
                   <Col xs={24} xl={10}>
                     <SectionCard
                       title="行为分类结果"
-                      subtitle="预测标签由模型返回，前端只做中文映射。"
+                      subtitle="识别样本更接近哪一类日常用电模式。"
                       extra={
                         <Button
                           loading={classificationActionLoading}
@@ -569,14 +608,14 @@ export function DatasetDetailPage() {
                           </div>
                         </Space>
                       ) : (
-                        <Empty description="暂无分类结果，可点击右上角重新生成分类" />
+                        <Empty description="暂无分类结果" />
                       )}
                     </SectionCard>
                   </Col>
                   <Col xs={24} xl={14}>
                     <SectionCard
                       title="节能建议面板"
-                      subtitle="规则建议与智能问答共用同一套上下文语义。"
+                      subtitle="根据当前样本特征给出可执行建议。"
                       extra={
                         <Button
                           loading={adviceActionLoading}
@@ -589,7 +628,7 @@ export function DatasetDetailPage() {
                       <List
                         itemLayout="vertical"
                         dataSource={adviceItems}
-                        locale={{ emptyText: '暂无节能建议，可点击右上角生成规则建议' }}
+                        locale={{ emptyText: '暂无节能建议' }}
                         renderItem={(item) => (
                           <List.Item key={item.key}>
                             <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -617,16 +656,26 @@ export function DatasetDetailPage() {
           },
           {
             key: 'forecast',
-            label: '预测与回测',
+            label: '未来预测',
             children: (
               <div className="page-stack">
                 <SectionCard
                   title="预测操作台"
-                  subtitle="前端负责触发预测与回测，并直接消费后端返回的摘要和曲线数据。"
+                  subtitle="基于最近 3 天窗口，递推预测未来第 1 到第 3 天。"
                   extra={
                     <Space wrap>
                       <Select
-                        value={selectedModel}
+                        value={selectedFutureDay}
+                        style={{ width: 160 }}
+                        options={[
+                          { label: '未来第 1 天', value: 1 },
+                          { label: '未来第 2 天', value: 2 },
+                          { label: '未来第 3 天', value: 3 },
+                        ]}
+                        onChange={(value: number) => setSelectedFutureDay(value)}
+                      />
+                      <Select
+                        value={selectedForecastModel}
                         style={{ width: 180 }}
                         options={[
                           { label: forecastModelMap.lstm, value: 'lstm' },
@@ -635,7 +684,7 @@ export function DatasetDetailPage() {
                             value: 'transformer',
                           },
                         ]}
-                        onChange={(value: ForecastModelType) => setSelectedModel(value)}
+                        onChange={(value: ForecastModelType) => setSelectedForecastModel(value)}
                       />
                       <Button
                         type="primary"
@@ -644,13 +693,6 @@ export function DatasetDetailPage() {
                         onClick={() => void handleGenerateForecast()}
                       >
                         生成预测
-                      </Button>
-                      <Button
-                        icon={<HistoryOutlined />}
-                        loading={forecastActionLoading}
-                        onClick={() => void handleRunBacktest()}
-                      >
-                        运行回测
                       </Button>
                     </Space>
                   }
@@ -693,9 +735,9 @@ export function DatasetDetailPage() {
 
                 <Row gutter={[16, 16]}>
                   <Col xs={24} xl={9}>
-                    <SectionCard title="预测结果列表" subtitle="按模型保留最近结果，便于切换查看。">
+                    <SectionCard title="预测结果列表" subtitle="保留最近结果，便于切换查看。">
                       <List
-                        dataSource={forecasts}
+                        dataSource={visibleForecasts}
                         locale={{ emptyText: '暂无预测记录' }}
                         renderItem={(item) => (
                           <List.Item
@@ -706,13 +748,15 @@ export function DatasetDetailPage() {
                             }
                             onClick={() => {
                               setActiveForecastId(item.id)
-                              setSelectedModel(item.model_type)
                             }}
                           >
                             <Space direction="vertical" size={6} style={{ width: '100%' }}>
                               <Space wrap>
                                 <Tag className="tone-tag tone-tag--accent">
                                   {forecastModelMap[item.model_type]}
+                                </Tag>
+                                <Tag className="tone-tag tone-tag--warm">
+                                  {getForecastDayLabel(item.forecast_start, detail.dataset.time_end)}
                                 </Tag>
                                 <Typography.Text strong>
                                   {formatDateTime(item.forecast_start)}
@@ -729,7 +773,7 @@ export function DatasetDetailPage() {
                     </SectionCard>
                   </Col>
                   <Col xs={24} xl={15}>
-                    <SectionCard title="预测曲线" subtitle="默认展示所选预测记录的时间序列。">
+                    <SectionCard title="预测曲线" subtitle="展示所选预测记录的时间序列。">
                       {forecastDetailLoading ? (
                         <div className="page-state page-state--compact">
                           <Spin />
@@ -751,10 +795,13 @@ export function DatasetDetailPage() {
                 </Row>
 
                 <Row gutter={[16, 16]}>
-                  <Col xs={24} xl={10}>
-                    <SectionCard title="预测摘要" subtitle="供前端展示与智能问答上下文复用。">
+                  <Col xs={24}>
+                    <SectionCard title="预测摘要" subtitle="汇总关键时段与风险标签。">
                       {selectedForecast ? (
                         <Descriptions column={1} size="small">
+                          <Descriptions.Item label="预测天数">
+                            {getForecastDayLabel(selectedForecast.forecast_start, detail.dataset.time_end)}
+                          </Descriptions.Item>
                           <Descriptions.Item label="模型类型">
                             {forecastModelMap[selectedForecast.model_type]}
                           </Descriptions.Item>
@@ -792,56 +839,6 @@ export function DatasetDetailPage() {
                       )}
                     </SectionCard>
                   </Col>
-                  <Col xs={24} xl={14}>
-                    <SectionCard title="回测结果" subtitle="用于比较模型在指定窗口上的预测效果。">
-                      {backtest ? (
-                        <div className="page-stack">
-                          <Row gutter={[12, 12]}>
-                            <Col xs={24} md={8}>
-                              <MetricCard
-                                label="MAE"
-                                value={formatNumber(backtest.backtest.metrics.mae, 3)}
-                                accent="amber"
-                              />
-                            </Col>
-                            <Col xs={24} md={8}>
-                              <MetricCard
-                                label="RMSE"
-                                value={formatNumber(backtest.backtest.metrics.rmse, 3)}
-                                accent="teal"
-                              />
-                            </Col>
-                            <Col xs={24} md={8}>
-                              <MetricCard
-                                label="SMAPE"
-                                value={`${formatNumber(backtest.backtest.metrics.smape, 1)}%`}
-                                accent="coral"
-                              />
-                            </Col>
-                          </Row>
-                          <Row gutter={[12, 12]}>
-                            <Col xs={24} md={8}>
-                              <MetricCard
-                                label="WAPE"
-                                value={`${formatNumber(backtest.backtest.metrics.wape, 1)}%`}
-                                accent="olive"
-                              />
-                            </Col>
-                          </Row>
-                          <CompareTrendChart
-                            data={backtest.predictions.map((item) => ({
-                              label: formatTime(item.timestamp),
-                              actual: item.actual,
-                              predicted: item.predicted,
-                            }))}
-                            unit="W"
-                          />
-                        </div>
-                      ) : (
-                        <Empty description="暂无回测结果，请先运行回测" />
-                      )}
-                    </SectionCard>
-                  </Col>
                 </Row>
               </div>
             ),
@@ -852,16 +849,18 @@ export function DatasetDetailPage() {
             children: (
               <SectionCard
                 title="导出报告"
-                subtitle="首版以 Excel 导出为必做项，同时保留下载入口。"
+                subtitle="仅保留 PDF 报告导出，便于统一归档与展示。"
                 extra={
-                  <Button
-                    type="primary"
-                    icon={<LineChartOutlined />}
-                    loading={reportActionLoading}
-                    onClick={() => void handleExportReport()}
-                  >
-                    导出 Excel 报告
-                  </Button>
+                  <Space wrap>
+                    <Button
+                      type="primary"
+                      icon={<FilePdfOutlined />}
+                      loading={reportActionLoading}
+                      onClick={() => void handleExportReport('pdf')}
+                    >
+                      导出 PDF
+                    </Button>
+                  </Space>
                 }
               >
                 <List
@@ -881,9 +880,15 @@ export function DatasetDetailPage() {
                       ]}
                     >
                       <List.Item.Meta
-                        avatar={<FileExcelOutlined className="report-icon" />}
+                        avatar={
+                          report.report_type === 'pdf' ? (
+                            <FilePdfOutlined className="report-icon" />
+                          ) : (
+                            <DownloadOutlined className="report-icon" />
+                          )
+                        }
                         title={`${reportTypeMap[report.report_type]} · #${report.id}`}
-                        description={`${report.file_path} · ${formatFileSize(report.file_size)} · ${formatDateTime(report.created_at)}`}
+                        description={`${formatFileLabel(report.file_path)} · ${formatFileSize(report.file_size)} · ${formatDateTime(report.created_at)}`}
                       />
                     </List.Item>
                   )}

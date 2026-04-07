@@ -471,3 +471,93 @@ def export_representative_test_samples(
         )
 
     return exported_samples
+
+
+def export_live_sample(
+    base_dir: Path,
+    labels_path: Path,
+    output_path: Path,
+    forecast_config_path: Path,
+    house_id: str | None = None,
+    window_days: int = 21,
+) -> dict[str, object]:
+    """从预测验证集导出一份供 live 模块循环播放的连续窗口样本。"""
+    if window_days <= 0:
+        raise ValueError("window_days 必须大于 0")
+
+    labels_df = _load_labels(labels_path)
+    validation_index = _load_validation_forecast_index(forecast_config_path)
+    normalized_house_id = _normalize_house_id(house_id) or _infer_house_id(
+        labels_df=labels_df,
+        validation_index=validation_index,
+    )
+
+    house_validation_df = validation_index.loc[
+        validation_index["house_id"] == normalized_house_id
+    ].copy()
+    if house_validation_df.empty:
+        raise ValueError(f"在预测验证集中未找到家庭 {normalized_house_id}")
+
+    house_labels_df = labels_df.loc[labels_df["house_id"] == normalized_house_id].copy()
+    if house_labels_df.empty:
+        raise ValueError(f"在分类标签中未找到家庭 {normalized_house_id}")
+
+    house_base_df = _load_house_base_data(base_dir, normalized_house_id)
+    day_summary = _build_day_summary(
+        house_base_df=house_base_df,
+        house_labels_df=house_labels_df,
+        validation_samples_df=house_validation_df,
+        window_days=window_days,
+    )
+    selections = _choose_scenarios(day_summary=day_summary, count=1)
+    if not selections:
+        raise ValueError(f"家庭 {normalized_house_id} 在验证集中没有可导出的连续样本窗口")
+
+    selected = selections[0]
+    target_date = selected["target_date"]
+    window_start = target_date - timedelta(days=window_days - 1)
+    complete_df = select_complete_days(house_base_df)
+    live_df = complete_df.loc[
+        (complete_df["date"] >= window_start)
+        & (complete_df["date"] <= target_date)
+    ].copy()
+
+    expected_rows = window_days * 96
+    if len(live_df) != expected_rows:
+        raise ValueError(
+            f"家庭 {normalized_house_id} 在 {target_date} 的 live 连续窗口样本数据不完整"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    live_df.to_csv(output_path, index=False)
+    return {
+        "house_id": normalized_house_id,
+        "scenario_name": selected["scenario_name"],
+        "label_name": selected["label_name"],
+        "sample_id": selected["sample_id"],
+        "target_date": target_date.isoformat(),
+        "window_start": window_start.isoformat(),
+        "window_days": window_days,
+        "row_count": len(live_df),
+        "output_path": str(output_path),
+    }
+
+
+def export_live_week_sample(
+    base_dir: Path,
+    labels_path: Path,
+    output_path: Path,
+    forecast_config_path: Path,
+    house_id: str | None = None,
+    window_days: int = 21,
+) -> dict[str, object]:
+    """兼容旧名称，内部统一走连续窗口样本导出。"""
+
+    return export_live_sample(
+        base_dir=base_dir,
+        labels_path=labels_path,
+        output_path=output_path,
+        forecast_config_path=forecast_config_path,
+        house_id=house_id,
+        window_days=window_days,
+    )
