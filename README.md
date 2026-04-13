@@ -228,7 +228,7 @@ docker compose up -d db backend frontend live
 
 - 分类权重：`models_agent/checkpoints/classification/tcn/best_model.pt`
 - LSTM 权重：`models_agent/checkpoints/forecast/lstm/best_model.pt`
-- Transformer 权重：`models_agent/checkpoints/forecast/transformer/best_model.pt`
+- Transformer 权重：`models_agent/checkpoints/forecast/transformer_direct/best_model.pt`
 
 ## 本地开发
 
@@ -264,7 +264,7 @@ uv run python data/process/main.py run-all
 uv run python data/process/main.py export-live-sample
 uv run python classification/TCN/main.py train
 uv run python forecast/LSTM/main.py train
-uv run python forecast/transformer/main.py train
+uv run python forecast/transformer_direct/main.py train
 ```
 
 ### 实时演示模块

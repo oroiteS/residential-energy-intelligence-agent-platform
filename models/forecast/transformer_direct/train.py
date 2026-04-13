@@ -16,22 +16,39 @@ import torch
 from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
+    current_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(current_dir))
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecast.transformer.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
-from forecast.transformer.engine import (
-    build_criterion,
-    build_model,
-    count_parameters,
-    create_data_loaders,
-    create_split_datasets,
-    describe_loss,
-    evaluate,
-    save_checkpoint,
-    save_json_summary,
-    set_seed,
-    train_one_epoch,
-)
+    from config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from engine import (
+        build_criterion,
+        build_model,
+        count_parameters,
+        create_data_loaders,
+        create_split_datasets,
+        describe_loss,
+        evaluate,
+        save_checkpoint,
+        save_json_summary,
+        set_seed,
+        train_one_epoch,
+    )
+else:
+    from .config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from .engine import (
+        build_criterion,
+        build_model,
+        count_parameters,
+        create_data_loaders,
+        create_split_datasets,
+        describe_loss,
+        evaluate,
+        save_checkpoint,
+        save_json_summary,
+        set_seed,
+        train_one_epoch,
+    )
 
 
 def plot_training_history(

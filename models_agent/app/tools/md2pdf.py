@@ -1068,10 +1068,9 @@ class PDFBuilder:
             # H2 — Chapter heading
             if stripped.startswith('## '):
                 title = stripped[3:].strip()
-                story.append(PageBreak())
                 cm = ChapterMark(title, level=1); story.append(cm)
                 hdeco = self.L["heading_decoration"]
-                story.append(Spacer(1, self.body_h * 0.30))
+                story.append(Spacer(1, 7*mm))
                 story.append(Paragraph(md_inline(title, ah), ST['chapter']))
                 if hdeco == "rules":
                     story.append(Spacer(1, 5*mm))

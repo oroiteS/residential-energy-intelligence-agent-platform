@@ -14,10 +14,25 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
+    current_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(current_dir))
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecast.transformer.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
-from forecast.transformer.engine import build_model, checkpoint_to_normalization, load_checkpoint, save_json_summary
+    from config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from engine import (
+        build_model,
+        checkpoint_to_normalization,
+        load_checkpoint,
+        save_json_summary,
+    )
+else:
+    from .config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from .engine import (
+        build_model,
+        checkpoint_to_normalization,
+        load_checkpoint,
+        save_json_summary,
+    )
 from forecast.LSTM.constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
 from forecast.LSTM.dataset import (
     DEFAULT_NORMALIZATION_MODE,
@@ -383,7 +398,9 @@ def main(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="执行 decoder-only Transformer 推理")
+    parser = argparse.ArgumentParser(
+        description="执行 patch-based direct multi-step Transformer 推理"
+    )
     parser.add_argument("--input", type=Path, required=True, help="输入 csv 或 json 路径")
     parser.add_argument(
         "--config",
