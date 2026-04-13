@@ -175,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     live_parser.add_argument(
         "--forecast-config",
         type=Path,
-        default=Path("forecast/transformer/configs/config.yaml"),
+        default=Path("forecast/transformer_direct/configs/config.yaml"),
         help="预测模型配置文件路径，默认: %(default)s",
     )
     live_parser.add_argument(

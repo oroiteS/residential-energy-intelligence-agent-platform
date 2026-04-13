@@ -61,6 +61,7 @@ import type {
   ForecastDetail,
   ForecastModelType,
   ForecastRecord,
+  PeakValleyConfig,
   ReportRecord,
   ReportType,
 } from '@/types/domain'
@@ -127,6 +128,109 @@ function getForecastDayLabel(
     return '历史记录'
   }
   return `未来第 ${dayOffset} 天`
+}
+
+type MinuteRange = {
+  start: number
+  end: number
+}
+
+function parseClockMinute(raw: string) {
+  const parts = raw.trim().split(':')
+  if (parts.length !== 2) {
+    return null
+  }
+
+  const hour = Number(parts[0])
+  const minute = Number(parts[1])
+  if (
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null
+  }
+
+  return hour * 60 + minute
+}
+
+function expandPeriodToRanges(period: string): MinuteRange[] {
+  const parts = period.split('-')
+  if (parts.length !== 2) {
+    return []
+  }
+
+  const start = parseClockMinute(parts[0])
+  const end = parseClockMinute(parts[1])
+  if (start === null || end === null) {
+    return []
+  }
+
+  if (start === end) {
+    return [{ start: 0, end: 24 * 60 }]
+  }
+  if (start < end) {
+    return [{ start, end }]
+  }
+  return [
+    { start, end: 24 * 60 },
+    { start: 0, end },
+  ]
+}
+
+function mergeMinuteRanges(ranges: MinuteRange[]) {
+  if (ranges.length === 0) {
+    return []
+  }
+
+  const sorted = [...ranges].sort((left, right) => left.start - right.start)
+  const merged: MinuteRange[] = [sorted[0]]
+
+  for (const current of sorted.slice(1)) {
+    const last = merged[merged.length - 1]
+    if (current.start <= last.end) {
+      last.end = Math.max(last.end, current.end)
+      continue
+    }
+    merged.push({ ...current })
+  }
+
+  return merged
+}
+
+function formatMinute(minute: number) {
+  const normalized = ((minute % (24 * 60)) + 24 * 60) % (24 * 60)
+  const hour = Math.floor(normalized / 60)
+  const remain = normalized % 60
+  return `${String(hour).padStart(2, '0')}:${String(remain).padStart(2, '0')}`
+}
+
+function buildFlatPeriods(config: PeakValleyConfig) {
+  const occupied = mergeMinuteRanges(
+    [...config.peak, ...config.valley].flatMap((period) => expandPeriodToRanges(period)),
+  )
+  if (occupied.length === 0) {
+    return ['00:00-24:00']
+  }
+
+  const flat: MinuteRange[] = []
+  let cursor = 0
+  for (const range of occupied) {
+    if (cursor < range.start) {
+      flat.push({ start: cursor, end: range.start })
+    }
+    cursor = Math.max(cursor, range.end)
+  }
+  if (cursor < 24 * 60) {
+    flat.push({ start: cursor, end: 24 * 60 })
+  }
+
+  return flat
+    .filter((range) => range.end > range.start)
+    .map((range) => `${formatMinute(range.start)}-${range.end === 24 * 60 ? '24:00' : formatMinute(range.end)}`)
 }
 
 export function DatasetDetailPage() {
@@ -285,6 +389,7 @@ export function DatasetDetailPage() {
           value: item.kwh,
         }))
       : []
+  const flatPeriods = analysis ? buildFlatPeriods(analysis.peak_valley_config) : []
 
   if (loading) {
     return (
@@ -559,7 +664,13 @@ export function DatasetDetailPage() {
                         <Descriptions.Item label="谷时">
                           {analysis.peak_valley_config.valley.join(' / ')}
                         </Descriptions.Item>
+                        <Descriptions.Item label="平时">
+                          {flatPeriods.join(' / ')}
+                        </Descriptions.Item>
                       </Descriptions>
+                      <Typography.Text type="secondary">
+                        平时为未落入峰时、谷时配置的其余时段，所以峰时和谷时本身不需要互补。
+                      </Typography.Text>
                     </SectionCard>
                   </Col>
                 </Row>
@@ -636,13 +747,10 @@ export function DatasetDetailPage() {
                                 <Tag className="tone-tag tone-tag--warm">
                                   {adviceTypeMap[item.advice.advice_type]}
                                 </Tag>
-                                <Typography.Text strong>{item.advice.summary}</Typography.Text>
+                                <Typography.Text strong>{item.action}</Typography.Text>
                               </Space>
                               <Typography.Paragraph style={{ marginBottom: 0 }}>
                                 触发依据：{item.reason}
-                              </Typography.Paragraph>
-                              <Typography.Paragraph style={{ marginBottom: 0 }}>
-                                操作建议：{item.action}
                               </Typography.Paragraph>
                             </Space>
                           </List.Item>

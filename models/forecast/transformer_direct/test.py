@@ -1,4 +1,4 @@
-"""Decoder-only Transformer 预测测试入口。"""
+"""Patch-based direct multi-step Transformer 预测测试入口。"""
 
 from __future__ import annotations
 
@@ -10,21 +10,37 @@ import torch
 from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
+    current_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(current_dir))
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecast.transformer.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
-from forecast.transformer.engine import (
-    build_criterion,
-    build_model,
-    checkpoint_to_normalization,
-    create_eval_loader,
-    create_split_datasets,
-    describe_loss,
-    evaluate,
-    load_checkpoint,
-    save_json_summary,
-    set_seed,
-)
+    from config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from engine import (
+        build_criterion,
+        build_model,
+        checkpoint_to_normalization,
+        create_eval_loader,
+        create_split_datasets,
+        describe_loss,
+        evaluate,
+        load_checkpoint,
+        save_json_summary,
+        set_seed,
+    )
+else:
+    from .config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from .engine import (
+        build_criterion,
+        build_model,
+        checkpoint_to_normalization,
+        create_eval_loader,
+        create_split_datasets,
+        describe_loss,
+        evaluate,
+        load_checkpoint,
+        save_json_summary,
+        set_seed,
+    )
 
 
 def run_test(experiment_config) -> dict[str, object]:

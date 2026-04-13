@@ -1,0 +1,64 @@
+# 数据相关配置
+data:
+  # 分类样本文件路径，由预处理阶段生成
+  data_path: "data/processed/classification/classification_day_labels.csv"
+  # 训练集占比，剩余部分继续划分给验证集和测试集
+  train_ratio: 0.7
+  # 验证集占比，测试集占比 = 1 - train_ratio - val_ratio
+  val_ratio: 0.15
+
+# 模型结构配置
+model:
+  # 类别数固定为 4
+  num_classes: 4
+  # 最大 boosting 轮数
+  num_boost_round: 500
+  # 学习率
+  learning_rate: 0.05
+  # 树深度
+  max_depth: 6
+  # 行采样比例
+  subsample: 0.8
+  # 列采样比例
+  colsample_bytree: 0.8
+  # 最小叶子权重
+  min_child_weight: 2.0
+  # 分裂最小增益
+  gamma: 0.0
+  # L1 正则
+  reg_alpha: 0.0
+  # L2 正则
+  reg_lambda: 1.0
+  # hist 算法的桶数
+  max_bin: 256
+  # 树构建方式
+  tree_method: "hist"
+  # 线程数；0 表示使用库默认值
+  nthread: 0
+
+# 训练配置
+train:
+  # 训练输出目录，保存 best_model.json、model_metadata.json 和 training_summary.json
+  output_dir: "classification/XGBoost/output"
+  # 随机种子，保证可复现
+  seed: 42
+  # 训练监控指标
+  eval_metric: "mlogloss"
+  # 早停轮数
+  early_stopping_rounds: 30
+  # 日志打印间隔；设为 false 可关闭
+  verbose_eval: 20
+
+# 测试配置
+test:
+  # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.json
+  checkpoint_path: null
+  # 测试输出目录，保存 test_summary.json
+  output_dir: "classification/XGBoost/output"
+
+# 推理配置
+predict:
+  # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.json
+  checkpoint_path: null
+  # 推理输出目录，保存 prediction_results.csv 或 single_prediction.json
+  output_dir: "classification/XGBoost/output"

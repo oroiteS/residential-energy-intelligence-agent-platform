@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from forecast.transformer.config import DataConfig, ModelConfig, TrainConfig
-from forecast.transformer.model import PatchDirectTransformerForecaster
+if __package__ is None or __package__ == "":
+    current_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(current_dir))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+    from config import DataConfig, ModelConfig, TrainConfig
+    from model import PatchDirectTransformerForecaster
+else:
+    from .config import DataConfig, ModelConfig, TrainConfig
+    from .model import PatchDirectTransformerForecaster
 from forecast.LSTM.dataset import ForecastDataset, ForecastNormalizationStats
 from forecast.LSTM.engine import (
     checkpoint_to_normalization,
