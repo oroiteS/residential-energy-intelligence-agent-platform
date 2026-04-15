@@ -3,7 +3,7 @@
 实现思路参考 PatchTST:
 Yuqi Nie et al., "A Time Series is Worth 64 Words: Long-term Forecasting with
 Transformers", ICLR 2023.
-这里结合当前项目的 288 -> 96 负荷预测任务，采用 patch token 编码历史序列，
+这里结合当前项目的 672 -> 96 负荷预测任务，采用 patch token 编码历史序列，
 并通过直接预测头一次性输出未来 96 个点，避免自回归误差累积。
 """
 
@@ -12,11 +12,14 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from forecast.LSTM.constants import INPUT_LENGTH, TARGET_LENGTH
+try:
+    from .constants import INPUT_LENGTH, TARGET_LENGTH
+except ImportError:
+    from constants import INPUT_LENGTH, TARGET_LENGTH
 
 
 class PatchDirectTransformerForecaster(nn.Module):
-    """面向 288->96 任务的 patch-based direct multi-step Transformer。"""
+    """面向 672->96 任务的 patch-based direct multi-step Transformer。"""
 
     def __init__(
         self,

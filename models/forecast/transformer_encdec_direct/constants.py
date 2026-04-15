@@ -1,4 +1,4 @@
-"""LSTM 预测任务常量。"""
+"""Transformer Encoder-Decoder Direct 预测任务常量。"""
 
 from __future__ import annotations
 
@@ -16,3 +16,12 @@ ALL_FEATURE_NAMES = (
     "weekday_sin",
     "weekday_cos",
 )
+
+__all__ = [
+    "ALL_FEATURE_NAMES",
+    "STEPS_PER_DAY",
+    "INPUT_DAYS",
+    "TARGET_DAYS",
+    "INPUT_LENGTH",
+    "TARGET_LENGTH",
+]

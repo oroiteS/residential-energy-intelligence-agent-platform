@@ -1,10 +1,11 @@
-"""LSTM 训练与评估公共逻辑。"""
+"""Patch-based direct Transformer 训练与评估公共逻辑。"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 import random
+import sys
 from typing import Any
 
 import numpy as np
@@ -13,16 +14,32 @@ from torch import nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from forecast.LSTM.config import DataConfig, ExperimentConfig, ModelConfig, TrainConfig
-from forecast.LSTM.dataset import (
-    DEFAULT_NORMALIZATION_MODE,
-    LEGACY_NORMALIZATION_MODE,
-    ForecastDataset,
-    ForecastNormalizationStats,
-    load_forecast_samples,
-    split_samples,
-)
-from forecast.LSTM.model import Seq2SeqLSTMForecaster
+if __package__ is None or __package__ == "":
+    current_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(current_dir))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+    from config import DataConfig, ModelConfig, TrainConfig
+    from dataset import (
+        DEFAULT_NORMALIZATION_MODE,
+        LEGACY_NORMALIZATION_MODE,
+        ForecastDataset,
+        ForecastNormalizationStats,
+        load_forecast_samples,
+        split_samples,
+    )
+    from model import PatchDirectTransformerForecaster
+else:
+    from .config import DataConfig, ModelConfig, TrainConfig
+    from .dataset import (
+        DEFAULT_NORMALIZATION_MODE,
+        LEGACY_NORMALIZATION_MODE,
+        ForecastDataset,
+        ForecastNormalizationStats,
+        load_forecast_samples,
+        split_samples,
+    )
+    from .model import PatchDirectTransformerForecaster
 
 
 def set_seed(seed: int) -> None:
@@ -51,13 +68,17 @@ def compute_regression_metrics(
     return {"mae": mae, "rmse": rmse, "smape": smape, "wape": wape}
 
 
-def build_model(model_config: ModelConfig) -> Seq2SeqLSTMForecaster:
-    return Seq2SeqLSTMForecaster(
+def build_model(model_config: ModelConfig) -> PatchDirectTransformerForecaster:
+    return PatchDirectTransformerForecaster(
         input_size=model_config.input_size,
-        hidden_size=model_config.hidden_size,
+        d_model=model_config.d_model,
         num_layers=model_config.num_layers,
+        num_heads=model_config.num_heads,
+        ffn_dim=model_config.ffn_dim,
         dropout=model_config.dropout,
         target_length=model_config.target_length,
+        patch_length=model_config.patch_length,
+        patch_stride=model_config.patch_stride,
     )
 
 
@@ -77,6 +98,14 @@ def describe_loss(train_config: TrainConfig) -> str:
     if loss_name == "mse":
         return "MSELoss"
     raise ValueError(f"不支持的损失函数: {train_config.loss_name}")
+
+
+def _denormalize(
+    tensor: np.ndarray,
+    denorm_mean: np.ndarray,
+    denorm_std: np.ndarray,
+) -> np.ndarray:
+    return tensor * denorm_std + denorm_mean
 
 
 def create_split_datasets(
@@ -107,7 +136,6 @@ def create_split_datasets(
     reference_normalization = (
         train_dataset.normalization if normalization is None else normalization
     )
-
     val_dataset = ForecastDataset(
         val_samples,
         data_path=data_config.data_path,
@@ -144,133 +172,6 @@ def create_eval_loader(dataset: ForecastDataset, batch_size: int) -> DataLoader:
     return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
 
-def _denormalize(
-    tensor: np.ndarray,
-    denorm_mean: np.ndarray,
-    denorm_std: np.ndarray,
-) -> np.ndarray:
-    return tensor * denorm_std + denorm_mean
-
-
-def evaluate(
-    model: nn.Module,
-    data_loader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-    stage_label: str = "验证",
-    log_interval: int | None = None,
-) -> dict[str, float]:
-    model.eval()
-    total_loss = 0.0
-    total_samples = 0
-    predictions: list[np.ndarray] = []
-    targets: list[np.ndarray] = []
-    denorm_means: list[np.ndarray] = []
-    denorm_stds: list[np.ndarray] = []
-    total_batches = len(data_loader)
-
-    with torch.no_grad():
-        progress = tqdm(
-            data_loader,
-            total=total_batches,
-            desc=stage_label,
-            leave=False,
-            dynamic_ncols=True,
-            mininterval=1.0,
-        )
-        for features, labels, batch_denorm_mean, batch_denorm_std in progress:
-            features = features.to(device)
-            labels = labels.to(device)
-
-            outputs = model(features, teacher_forcing_ratio=0.0)
-            loss = criterion(outputs, labels)
-            total_loss += float(loss.item()) * len(labels)
-            total_samples += len(labels)
-            predictions.append(outputs.cpu().numpy())
-            targets.append(labels.cpu().numpy())
-            denorm_means.append(batch_denorm_mean.cpu().numpy())
-            denorm_stds.append(batch_denorm_std.cpu().numpy())
-            average_loss = total_loss / max(1, total_samples)
-            progress.set_postfix(avg_loss=f"{average_loss:.4f}")
-
-    y_pred = np.concatenate(predictions, axis=0)
-    y_true = np.concatenate(targets, axis=0)
-    mean_array = np.concatenate(denorm_means, axis=0)
-    std_array = np.concatenate(denorm_stds, axis=0)
-    pred_denorm = _denormalize(y_pred, mean_array, std_array)
-    true_denorm = _denormalize(y_true, mean_array, std_array)
-    metrics = compute_regression_metrics(pred_denorm, true_denorm)
-    metrics["loss"] = total_loss / len(y_true)
-    return metrics
-
-
-def train_one_epoch(
-    model: nn.Module,
-    data_loader: DataLoader,
-    criterion: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-    teacher_forcing_ratio: float,
-    gradient_clip_norm: float | None = None,
-    stage_label: str = "训练",
-    log_interval: int | None = None,
-) -> dict[str, float]:
-    model.train()
-    total_loss = 0.0
-    total_samples = 0
-    predictions: list[np.ndarray] = []
-    targets: list[np.ndarray] = []
-    denorm_means: list[np.ndarray] = []
-    denorm_stds: list[np.ndarray] = []
-    total_batches = len(data_loader)
-    progress = tqdm(
-        data_loader,
-        total=total_batches,
-        desc=stage_label,
-        leave=False,
-        dynamic_ncols=True,
-        mininterval=1.0,
-    )
-
-    for features, labels, batch_denorm_mean, batch_denorm_std in progress:
-        features = features.to(device)
-        labels = labels.to(device)
-
-        optimizer.zero_grad()
-        outputs = model(
-            features,
-            decoder_targets=labels,
-            teacher_forcing_ratio=teacher_forcing_ratio,
-        )
-        loss = criterion(outputs, labels)
-        loss.backward()
-        if gradient_clip_norm is not None:
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=gradient_clip_norm,
-            )
-        optimizer.step()
-
-        total_loss += float(loss.item()) * len(labels)
-        total_samples += len(labels)
-        predictions.append(outputs.detach().cpu().numpy())
-        targets.append(labels.cpu().numpy())
-        denorm_means.append(batch_denorm_mean.cpu().numpy())
-        denorm_stds.append(batch_denorm_std.cpu().numpy())
-        average_loss = total_loss / max(1, total_samples)
-        progress.set_postfix(avg_loss=f"{average_loss:.4f}")
-
-    y_pred = np.concatenate(predictions, axis=0)
-    y_true = np.concatenate(targets, axis=0)
-    mean_array = np.concatenate(denorm_means, axis=0)
-    std_array = np.concatenate(denorm_stds, axis=0)
-    pred_denorm = _denormalize(y_pred, mean_array, std_array)
-    true_denorm = _denormalize(y_true, mean_array, std_array)
-    metrics = compute_regression_metrics(pred_denorm, true_denorm)
-    metrics["loss"] = total_loss / len(y_true)
-    return metrics
-
-
 def count_parameters(model: nn.Module) -> int:
     return sum(parameter.numel() for parameter in model.parameters())
 
@@ -279,7 +180,7 @@ def save_checkpoint(
     checkpoint_path: Path,
     model: nn.Module,
     train_dataset: ForecastDataset,
-    experiment_config: ExperimentConfig,
+    experiment_config,
     metrics: dict[str, float],
 ) -> None:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -374,7 +275,9 @@ def normalization_to_checkpoint_payload(
             or normalization.target_mean is None
             or normalization.target_std is None
         ):
-            raise ValueError("global 模式缺少 feature_mean / feature_std / target_mean / target_std")
+            raise ValueError(
+                "global 模式缺少 feature_mean / feature_std / target_mean / target_std"
+            )
         payload["feature_mean"] = normalization.feature_mean.tolist()
         payload["feature_std"] = normalization.feature_std.tolist()
         payload["target_mean"] = normalization.target_mean
@@ -382,3 +285,160 @@ def normalization_to_checkpoint_payload(
         return payload
 
     raise ValueError(f"不支持的 aggregate_mode: {normalization.aggregate_mode}")
+
+
+def evaluate(
+    model: nn.Module,
+    data_loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+    stage_label: str = "验证",
+    log_interval: int | None = None,
+) -> dict[str, float]:
+    metrics, _, _ = evaluate_with_predictions(
+        model=model,
+        data_loader=data_loader,
+        criterion=criterion,
+        device=device,
+        stage_label=stage_label,
+        log_interval=log_interval,
+    )
+    return metrics
+
+
+def evaluate_with_predictions(
+    model: nn.Module,
+    data_loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+    stage_label: str = "验证",
+    log_interval: int | None = None,
+) -> tuple[dict[str, float], np.ndarray, np.ndarray]:
+    model.eval()
+    total_loss = 0.0
+    total_samples = 0
+    predictions: list[np.ndarray] = []
+    targets: list[np.ndarray] = []
+    denorm_means: list[np.ndarray] = []
+    denorm_stds: list[np.ndarray] = []
+    total_batches = len(data_loader)
+
+    with torch.no_grad():
+        progress = tqdm(
+            data_loader,
+            total=total_batches,
+            desc=stage_label,
+            leave=False,
+            dynamic_ncols=True,
+            mininterval=1.0,
+        )
+        for features, labels, batch_denorm_mean, batch_denorm_std in progress:
+            features = features.to(device)
+            labels = labels.to(device)
+
+            outputs = model(features)
+            loss = criterion(outputs, labels)
+            total_loss += float(loss.item()) * len(labels)
+            total_samples += len(labels)
+            predictions.append(outputs.cpu().numpy())
+            targets.append(labels.cpu().numpy())
+            denorm_means.append(batch_denorm_mean.cpu().numpy())
+            denorm_stds.append(batch_denorm_std.cpu().numpy())
+            average_loss = total_loss / max(1, total_samples)
+            progress.set_postfix(avg_loss=f"{average_loss:.4f}")
+
+    y_pred = np.concatenate(predictions, axis=0)
+    y_true = np.concatenate(targets, axis=0)
+    mean_array = np.concatenate(denorm_means, axis=0)
+    std_array = np.concatenate(denorm_stds, axis=0)
+    pred_denorm = _denormalize(y_pred, mean_array, std_array)
+    true_denorm = _denormalize(y_true, mean_array, std_array)
+    metrics = compute_regression_metrics(pred_denorm, true_denorm)
+    metrics["loss"] = total_loss / len(y_true)
+    return metrics, pred_denorm, true_denorm
+
+
+def train_one_epoch(
+    model: nn.Module,
+    data_loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    gradient_clip_norm: float | None = None,
+    stage_label: str = "训练",
+    log_interval: int | None = None,
+) -> dict[str, float]:
+    model.train()
+    total_loss = 0.0
+    total_samples = 0
+    predictions: list[np.ndarray] = []
+    targets: list[np.ndarray] = []
+    denorm_means: list[np.ndarray] = []
+    denorm_stds: list[np.ndarray] = []
+    total_batches = len(data_loader)
+    progress = tqdm(
+        data_loader,
+        total=total_batches,
+        desc=stage_label,
+        leave=False,
+        dynamic_ncols=True,
+        mininterval=1.0,
+    )
+
+    for features, labels, batch_denorm_mean, batch_denorm_std in progress:
+        features = features.to(device)
+        labels = labels.to(device)
+
+        optimizer.zero_grad()
+        outputs = model(features)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        if gradient_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                max_norm=gradient_clip_norm,
+            )
+        optimizer.step()
+
+        total_loss += float(loss.item()) * len(labels)
+        total_samples += len(labels)
+        predictions.append(outputs.detach().cpu().numpy())
+        targets.append(labels.cpu().numpy())
+        denorm_means.append(batch_denorm_mean.cpu().numpy())
+        denorm_stds.append(batch_denorm_std.cpu().numpy())
+        average_loss = total_loss / max(1, total_samples)
+        progress.set_postfix(avg_loss=f"{average_loss:.4f}")
+
+    y_pred = np.concatenate(predictions, axis=0)
+    y_true = np.concatenate(targets, axis=0)
+    mean_array = np.concatenate(denorm_means, axis=0)
+    std_array = np.concatenate(denorm_stds, axis=0)
+    pred_denorm = _denormalize(y_pred, mean_array, std_array)
+    true_denorm = _denormalize(y_true, mean_array, std_array)
+    metrics = compute_regression_metrics(pred_denorm, true_denorm)
+    metrics["loss"] = total_loss / len(y_true)
+    return metrics
+
+
+__all__ = [
+    "ForecastDataset",
+    "ForecastNormalizationStats",
+    "DataConfig",
+    "build_model",
+    "build_criterion",
+    "compute_regression_metrics",
+    "describe_loss",
+    "evaluate",
+    "evaluate_with_predictions",
+    "train_one_epoch",
+    "set_seed",
+    "count_parameters",
+    "create_split_datasets",
+    "create_data_loaders",
+    "create_eval_loader",
+    "save_checkpoint",
+    "save_json_summary",
+    "load_checkpoint",
+    "checkpoint_to_normalization",
+    "normalization_to_checkpoint_payload",
+]

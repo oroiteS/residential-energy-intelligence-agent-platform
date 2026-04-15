@@ -1,4 +1,4 @@
-"""LSTM 预测推理入口。"""
+"""Patch-based direct Transformer 预测推理入口。"""
 
 from __future__ import annotations
 
@@ -14,24 +14,43 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
+    current_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(current_dir))
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecast.LSTM.config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
-from forecast.LSTM.constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
-from forecast.LSTM.dataset import (
-    DEFAULT_NORMALIZATION_MODE,
-    FEATURE_COLUMN_MAP,
-    FEATURE_PAYLOAD_FIELD_MAP,
-    LEGACY_NORMALIZATION_MODE,
-    ForecastNormalizationStats,
-    build_temporal_feature_sequences,
-)
-from forecast.LSTM.engine import (
-    build_model,
-    checkpoint_to_normalization,
-    load_checkpoint,
-    save_json_summary,
-)
+    from constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
+    from config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from dataset import (
+        DEFAULT_NORMALIZATION_MODE,
+        FEATURE_COLUMN_MAP,
+        FEATURE_PAYLOAD_FIELD_MAP,
+        LEGACY_NORMALIZATION_MODE,
+        ForecastNormalizationStats,
+        build_temporal_feature_sequences,
+    )
+    from engine import (
+        build_model,
+        checkpoint_to_normalization,
+        load_checkpoint,
+        save_json_summary,
+    )
+else:
+    from .constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
+    from .config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from .dataset import (
+        DEFAULT_NORMALIZATION_MODE,
+        FEATURE_COLUMN_MAP,
+        FEATURE_PAYLOAD_FIELD_MAP,
+        LEGACY_NORMALIZATION_MODE,
+        ForecastNormalizationStats,
+        build_temporal_feature_sequences,
+    )
+    from .engine import (
+        build_model,
+        checkpoint_to_normalization,
+        load_checkpoint,
+        save_json_summary,
+    )
 
 
 class PredictionDataset(Dataset[tuple[torch.Tensor, int]]):
@@ -293,7 +312,7 @@ def _predict_values(
         )
         for feature_batch, index_batch in progress:
             feature_batch = feature_batch.to(device)
-            outputs = model(feature_batch, teacher_forcing_ratio=0.0)
+            outputs = model(feature_batch)
             prediction_batches.append(outputs.cpu().numpy())
             batch_indices = index_batch.cpu().numpy()
             denorm_means.append(dataset.denorm_mean[batch_indices])
@@ -335,79 +354,21 @@ def predict_batch_from_path(
         f"y_pred_{index:03d}": predictions[:, index]
         for index in range(TARGET_LENGTH)
     }
-    return pd.concat(
-        [metadata.reset_index(drop=True), pd.DataFrame(prediction_columns)],
-        axis=1,
-    )
+    return pd.concat([metadata, pd.DataFrame(prediction_columns)], axis=1)
 
 
-def predict_single_sample(
-    sample: dict[str, Any],
-    config_path: Path = DEFAULT_CONFIG_PATH,
-) -> dict[str, Any]:
-    experiment_config = load_experiment_config(config_path=config_path)
-    single_df = pd.DataFrame(
-        [
-            _single_feature_record_from_payload(
-                sample,
-                experiment_config.data.feature_names,
-            )
-        ]
-    )
-    predict_config = experiment_config.predict
-    checkpoint_path = predict_config.checkpoint_path or (
-        experiment_config.train.output_dir / "best_model.pt"
-    )
-    features, metadata = _extract_features_and_metadata(
-        single_df,
-        experiment_config.data.feature_names,
-    )
-    predictions = _predict_values(
-        features=features,
-        checkpoint_path=checkpoint_path,
-        experiment_config=experiment_config,
-        batch_size=1,
-    )[0]
-    return {
-        **metadata.iloc[0].to_dict(),
-        "predictions": [float(value) for value in predictions],
-    }
-
-
-def run_prediction(
-    input_path: Path,
-    config_path: Path = DEFAULT_CONFIG_PATH,
-    output_path: Path | None = None,
+def save_predictions(
+    prediction_frame: pd.DataFrame,
+    output_path: Path,
 ) -> Path:
-    experiment_config = load_experiment_config(config_path=config_path)
-    predict_config = experiment_config.predict
-    prediction_df = predict_batch_from_path(
-        input_path=input_path,
-        config_path=config_path,
-    )
-
-    if output_path is None:
-        if input_path.suffix.lower() == ".json" and len(prediction_df) == 1:
-            output_path = predict_config.output_dir / "prediction.json"
-        else:
-            output_path = predict_config.output_dir / "prediction.csv"
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if input_path.suffix.lower() == ".json" and len(prediction_df) == 1:
-        row = prediction_df.iloc[0].to_dict()
-        payload = {
-            "sample_id": row["sample_id"],
-            "house_id": row["house_id"],
-            "input_start": row["input_start"],
-            "input_end": row["input_end"],
-            "predictions": [
-                float(row[f"y_pred_{index:03d}"])
-                for index in range(TARGET_LENGTH)
-            ],
-        }
-        save_json_summary(output_path, payload)
+    if output_path.suffix.lower() == ".json":
+        output_path.write_text(
+            prediction_frame.to_json(orient="records", force_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     else:
-        prediction_df.to_csv(output_path, index=False)
+        prediction_frame.to_csv(output_path, index=False)
     return output_path
 
 
@@ -415,12 +376,52 @@ def main(
     input_path: Path,
     config_path: Path = DEFAULT_CONFIG_PATH,
     output_path: Path | None = None,
-) -> None:
+) -> Path:
     log = tqdm.write
+    experiment_config = load_experiment_config(config_path=config_path)
+    if experiment_config.data.feature_names[0] not in ALL_FEATURE_NAMES:
+        raise ValueError("配置中的 feature_names 非法")
+
     log(f"[推理] 读取输入: {input_path}")
-    result_path = run_prediction(
+    prediction_frame = predict_batch_from_path(
         input_path=input_path,
         config_path=config_path,
-        output_path=output_path,
     )
-    log(f"推理完成，结果已写入: {result_path}")
+    target_output = output_path or (
+        experiment_config.predict.output_dir / "prediction.csv"
+    )
+    saved_path = save_predictions(prediction_frame, target_output)
+    save_json_summary(
+        experiment_config.predict.output_dir / "prediction_summary.json",
+        {
+            "input_path": str(input_path),
+            "output_path": str(saved_path),
+            "rows": len(prediction_frame),
+            "config": experiment_config.to_dict(),
+        },
+    )
+    log(f"推理完成，输出已保存到: {saved_path}")
+    return saved_path
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="执行 patch-based direct multi-step Transformer 推理"
+    )
+    parser.add_argument("--input", type=Path, required=True, help="输入 csv 或 json 路径")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="yaml 配置文件路径，默认: %(default)s",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="推理输出路径；不传时使用配置中的默认输出目录",
+    )
+    args = parser.parse_args()
+    main(input_path=args.input, config_path=args.config, output_path=args.output)

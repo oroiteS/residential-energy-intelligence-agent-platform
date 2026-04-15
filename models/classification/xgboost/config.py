@@ -6,8 +6,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import yaml
-
-from classification.XGBoost.constants import LABELS
 from common.config_validation import validate_config_schema
 
 
@@ -35,6 +33,7 @@ SECTION_KEYS = {
         "seed",
         "eval_metric",
         "early_stopping_rounds",
+        "early_stopping_min_delta",
         "verbose_eval",
     },
     "test": {"checkpoint_path", "output_dir"},
@@ -72,6 +71,7 @@ class TrainConfig:
     seed: int
     eval_metric: str
     early_stopping_rounds: int
+    early_stopping_min_delta: float
     verbose_eval: int | bool
 
 
@@ -141,7 +141,7 @@ def load_experiment_config(config_path: Path = DEFAULT_CONFIG_PATH) -> Experimen
         val_ratio=float(data_raw.get("val_ratio", 0.15)),
     )
     model_config = ModelConfig(
-        num_classes=int(model_raw.get("num_classes", len(LABELS))),
+        num_classes=int(model_raw.get("num_classes", 0)),
         num_boost_round=int(model_raw.get("num_boost_round", 500)),
         learning_rate=float(model_raw.get("learning_rate", 0.05)),
         max_depth=int(model_raw.get("max_depth", 6)),
@@ -160,6 +160,7 @@ def load_experiment_config(config_path: Path = DEFAULT_CONFIG_PATH) -> Experimen
         seed=int(train_raw.get("seed", 42)),
         eval_metric=str(train_raw.get("eval_metric", "mlogloss")),
         early_stopping_rounds=int(train_raw.get("early_stopping_rounds", 30)),
+        early_stopping_min_delta=float(train_raw.get("early_stopping_min_delta", 1e-4)),
         verbose_eval=(
             bool(train_raw.get("verbose_eval"))
             if isinstance(train_raw.get("verbose_eval"), bool)
@@ -179,8 +180,12 @@ def load_experiment_config(config_path: Path = DEFAULT_CONFIG_PATH) -> Experimen
 
     if data_config.train_ratio + data_config.val_ratio >= 1:
         raise ValueError("配置错误：train_ratio + val_ratio 必须小于 1")
-    if model_config.num_classes != len(LABELS):
-        raise ValueError(f"配置错误：model.num_classes 必须固定为 {len(LABELS)}")
+    if model_config.num_classes < 0:
+        raise ValueError("配置错误：model.num_classes 不能小于 0")
+    if train_config.early_stopping_rounds <= 0:
+        raise ValueError("配置错误：train.early_stopping_rounds 必须大于 0")
+    if train_config.early_stopping_min_delta < 0:
+        raise ValueError("配置错误：train.early_stopping_min_delta 不能小于 0")
     return ExperimentConfig(
         data=data_config,
         model=model_config,

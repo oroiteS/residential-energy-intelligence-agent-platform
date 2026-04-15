@@ -9,7 +9,10 @@ import yaml
 
 from common.config_validation import validate_config_schema
 from common.device import detect_device
-from forecast.LSTM.constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
+try:
+    from .constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
+except ImportError:
+    from constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "config.yaml"

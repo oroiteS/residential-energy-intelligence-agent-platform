@@ -9,15 +9,15 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from classification.TCN.dataset import AGGREGATE_COLUMNS
-from classification.XGBoost.config import DEFAULT_CONFIG_PATH, load_experiment_config
-from classification.XGBoost.constants import LABELS
-from classification.XGBoost.dataset import INDEX_TO_LABEL, load_prediction_samples, samples_to_xy
-from classification.XGBoost.engine import (
+from classification.xgboost.config import DEFAULT_CONFIG_PATH, load_experiment_config
+from classification.xgboost.constants import AGGREGATE_COLUMNS
+from classification.xgboost.dataset import load_prediction_samples, samples_to_xy
+from classification.xgboost.engine import (
     ensure_xgboost_available,
     load_model,
     load_metadata,
@@ -71,6 +71,7 @@ def _predict_probabilities(
     features: np.ndarray,
     checkpoint_path: Path,
     num_boost_round: int,
+    label_names: list[str],
 ) -> pd.DataFrame:
     booster = load_model(checkpoint_path)
     probabilities = predict_probabilities(
@@ -80,13 +81,13 @@ def _predict_probabilities(
     )
     probability_columns = {
         f"prob_{label}": probabilities[:, index]
-        for index, label in enumerate(LABELS)
+        for index, label in enumerate(label_names)
     }
     prediction_indices = probabilities.argmax(axis=1)
     confidence = probabilities.max(axis=1)
     return pd.DataFrame(
         {
-            "predicted_label": [INDEX_TO_LABEL[int(index)] for index in prediction_indices],
+            "predicted_label": [label_names[int(index)] for index in prediction_indices],
             "confidence": confidence,
             **probability_columns,
             "runtime_library": "xgboost",
@@ -99,13 +100,24 @@ def predict_batch_from_path(input_path: Path, config_path: Path = DEFAULT_CONFIG
     experiment_config = load_experiment_config(config_path=config_path)
     predict_config = experiment_config.predict
     checkpoint_path = predict_config.checkpoint_path or (experiment_config.train.output_dir / "best_model.json")
+    log = tqdm.write
+    log(f"[推理] 读取输入: {input_path}")
     data_frame = _load_input_records(input_path)
     samples = load_prediction_samples(data_frame)
     features, _, metadata = samples_to_xy(samples)
+    metadata_payload = load_metadata(checkpoint_path.with_name("model_metadata.json"))
+    label_names = [str(label) for label in metadata_payload.get("labels", [])]
+    if not label_names:
+        raise ValueError("模型元数据缺少 labels，无法完成推理")
+    log(
+        f"[推理] checkpoint={checkpoint_path} "
+        f"samples={len(features)} feature_dim={features.shape[1]}"
+    )
     prediction_df = _predict_probabilities(
         features=features,
         checkpoint_path=checkpoint_path,
         num_boost_round=experiment_config.model.num_boost_round,
+        label_names=label_names,
     )
     if "label_name" in data_frame.columns:
         metadata["label_name"] = data_frame["label_name"].astype(str)
@@ -120,10 +132,15 @@ def predict_single_sample(sample: dict[str, Any], config_path: Path = DEFAULT_CO
     checkpoint_path = experiment_config.predict.checkpoint_path or (
         experiment_config.train.output_dir / "best_model.json"
     )
+    metadata_payload = load_metadata(checkpoint_path.with_name("model_metadata.json"))
+    label_names = [str(label) for label in metadata_payload.get("labels", [])]
+    if not label_names:
+        raise ValueError("模型元数据缺少 labels，无法完成推理")
     prediction_df = _predict_probabilities(
         features=features,
         checkpoint_path=checkpoint_path,
         num_boost_round=experiment_config.model.num_boost_round,
+        label_names=label_names,
     )
     return pd.concat([metadata.reset_index(drop=True), prediction_df], axis=1).iloc[0].to_dict()
 
@@ -133,6 +150,7 @@ def run_prediction(
     config_path: Path = DEFAULT_CONFIG_PATH,
     output_path: Path | None = None,
 ) -> Path:
+    log = tqdm.write
     experiment_config = load_experiment_config(config_path=config_path)
     prediction_df = predict_batch_from_path(input_path=input_path, config_path=config_path)
     checkpoint_path = experiment_config.predict.checkpoint_path or (
@@ -162,9 +180,10 @@ def run_prediction(
             "config": experiment_config.to_dict(),
         },
     )
+    log(f"[推理] 结果已写入: {output_path}")
     return output_path
 
 
 def main(input_path: Path, config_path: Path = DEFAULT_CONFIG_PATH, output_path: Path | None = None) -> None:
     result_path = run_prediction(input_path=input_path, config_path=config_path, output_path=output_path)
-    print(f"推理完成，结果已写入: {result_path}")
+    tqdm.write(f"推理完成，结果已写入: {result_path}")

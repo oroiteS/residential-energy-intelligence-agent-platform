@@ -10,17 +10,48 @@ import pandas as pd
 
 from data.process.common.base import list_base_files, load_base_file, select_complete_days
 from data.process.common.progress import ProgressBar, log_stage
+from forecast.LSTM.constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
+
+INPUT_DAYS = 7
+TARGET_DAYS = 1
+WINDOW_DAYS = INPUT_DAYS + TARGET_DAYS
 
 
-def _build_forecast_record(
+def _resolve_array_paths(metadata_path: Path) -> tuple[Path, Path]:
+    stem = metadata_path.stem
+    return (
+        metadata_path.with_name(f"{stem}_features.npy"),
+        metadata_path.with_name(f"{stem}_targets.npy"),
+    )
+
+
+def _iter_valid_windows(
+    day_groups: list[tuple[pd.Timestamp, pd.DataFrame]],
+) -> list[tuple[list[tuple[pd.Timestamp, pd.DataFrame]], tuple[pd.Timestamp, pd.DataFrame]]]:
+    valid_windows: list[
+        tuple[list[tuple[pd.Timestamp, pd.DataFrame]], tuple[pd.Timestamp, pd.DataFrame]]
+    ] = []
+    for start_index in range(len(day_groups) - WINDOW_DAYS + 1):
+        window = day_groups[start_index : start_index + WINDOW_DAYS]
+        dates = [day for day, _ in window]
+        if any(
+            dates[offset + 1] - dates[offset] != timedelta(days=1)
+            for offset in range(WINDOW_DAYS - 1)
+        ):
+            continue
+        valid_windows.append((window[:INPUT_DAYS], window[INPUT_DAYS]))
+    return valid_windows
+
+
+def _build_forecast_sample(
     house_id: str,
     input_days: list[tuple[pd.Timestamp, pd.DataFrame]],
     target_day: tuple[pd.Timestamp, pd.DataFrame],
-) -> dict[str, object]:
+) -> tuple[dict[str, object], np.ndarray, np.ndarray]:
     input_dates = [day.isoformat() for day, _ in input_days]
     target_date = target_day[0].isoformat()
 
-    record: dict[str, object] = {
+    metadata: dict[str, object] = {
         "sample_id": f"{house_id}_{input_dates[0]}_{target_date}",
         "house_id": house_id,
         "input_start": input_dates[0],
@@ -35,13 +66,15 @@ def _build_forecast_record(
         "target_clipped_points": 0,
     }
 
-    aggregate_values: list[float] = []
-    active_values: list[int] = []
-    burst_values: list[int] = []
-    slot_sin_values: list[float] = []
-    slot_cos_values: list[float] = []
-    weekday_sin_values: list[float] = []
-    weekday_cos_values: list[float] = []
+    feature_columns: dict[str, list[float]] = {
+        "aggregate": [],
+        "active_appliance_count": [],
+        "burst_event_count": [],
+        "slot_sin": [],
+        "slot_cos": [],
+        "weekday_sin": [],
+        "weekday_cos": [],
+    }
     input_imputed_points = 0
     input_clipped_points = 0
     for _, day_df in input_days:
@@ -50,13 +83,23 @@ def _build_forecast_record(
         weekday_index = sorted_df["timestamp"].dt.dayofweek.to_numpy(dtype=np.float32)
         slot_angle = 2.0 * np.pi * slot_index / 96.0
         weekday_angle = 2.0 * np.pi * weekday_index / 7.0
-        aggregate_values.extend(sorted_df["aggregate"].astype(float).tolist())
-        active_values.extend(sorted_df["active_appliance_count"].astype(int).tolist())
-        burst_values.extend(sorted_df["burst_event_count"].astype(int).tolist())
-        slot_sin_values.extend(np.sin(slot_angle).astype(float).tolist())
-        slot_cos_values.extend(np.cos(slot_angle).astype(float).tolist())
-        weekday_sin_values.extend(np.sin(weekday_angle).astype(float).tolist())
-        weekday_cos_values.extend(np.cos(weekday_angle).astype(float).tolist())
+        feature_columns["aggregate"].extend(
+            sorted_df["aggregate"].astype(float).tolist()
+        )
+        feature_columns["active_appliance_count"].extend(
+            sorted_df["active_appliance_count"].astype(float).tolist()
+        )
+        feature_columns["burst_event_count"].extend(
+            sorted_df["burst_event_count"].astype(float).tolist()
+        )
+        feature_columns["slot_sin"].extend(np.sin(slot_angle).astype(float).tolist())
+        feature_columns["slot_cos"].extend(np.cos(slot_angle).astype(float).tolist())
+        feature_columns["weekday_sin"].extend(
+            np.sin(weekday_angle).astype(float).tolist()
+        )
+        feature_columns["weekday_cos"].extend(
+            np.cos(weekday_angle).astype(float).tolist()
+        )
         input_imputed_points += int(sorted_df["is_imputed_point"].sum())
         input_clipped_points += int(sorted_df["is_clipped_point"].sum())
 
@@ -65,30 +108,27 @@ def _build_forecast_record(
     target_imputed_points = int(target_sorted_df["is_imputed_point"].sum())
     target_clipped_points = int(target_sorted_df["is_clipped_point"].sum())
 
-    record["input_imputed_points"] = input_imputed_points
-    record["input_imputed_ratio"] = float(input_imputed_points) / float(len(aggregate_values))
-    record["input_clipped_points"] = input_clipped_points
-    record["target_imputed_points"] = target_imputed_points
-    record["target_imputed_ratio"] = float(target_imputed_points) / float(len(target_values))
-    record["target_clipped_points"] = target_clipped_points
+    aggregate_values = feature_columns["aggregate"]
+    metadata["input_imputed_points"] = input_imputed_points
+    metadata["input_imputed_ratio"] = float(input_imputed_points) / float(len(aggregate_values))
+    metadata["input_clipped_points"] = input_clipped_points
+    metadata["target_imputed_points"] = target_imputed_points
+    metadata["target_imputed_ratio"] = float(target_imputed_points) / float(len(target_values))
+    metadata["target_clipped_points"] = target_clipped_points
 
-    for index, value in enumerate(aggregate_values):
-        record[f"x_aggregate_{index:03d}"] = float(value)
-    for index, value in enumerate(active_values):
-        record[f"x_active_count_{index:03d}"] = int(value)
-    for index, value in enumerate(burst_values):
-        record[f"x_burst_count_{index:03d}"] = int(value)
-    for index, value in enumerate(slot_sin_values):
-        record[f"x_slot_sin_{index:03d}"] = float(value)
-    for index, value in enumerate(slot_cos_values):
-        record[f"x_slot_cos_{index:03d}"] = float(value)
-    for index, value in enumerate(weekday_sin_values):
-        record[f"x_weekday_sin_{index:03d}"] = float(value)
-    for index, value in enumerate(weekday_cos_values):
-        record[f"x_weekday_cos_{index:03d}"] = float(value)
-    for index, value in enumerate(target_values):
-        record[f"y_aggregate_{index:03d}"] = float(value)
-    return record
+    feature_array = np.stack(
+        [
+            np.asarray(feature_columns[feature_name], dtype=np.float32)
+            for feature_name in ALL_FEATURE_NAMES
+        ],
+        axis=-1,
+    )
+    target_array = np.asarray(target_values, dtype=np.float32)
+    if feature_array.shape != (INPUT_LENGTH, len(ALL_FEATURE_NAMES)):
+        raise ValueError(f"预测特征形状不正确: {feature_array.shape}")
+    if target_array.shape != (TARGET_LENGTH,):
+        raise ValueError(f"预测目标形状不正确: {target_array.shape}")
+    return metadata, feature_array, target_array
 
 
 def _write_rows(
@@ -115,11 +155,40 @@ def build_forecast_dataset(base_dir: Path, output_dir: Path) -> pd.DataFrame:
 
     log_stage("按家庭构造预测样本")
     output_dir.mkdir(parents=True, exist_ok=True)
-    forecast_path = output_dir / "forecast_samples.csv"
-    summary_records: list[dict[str, object]] = []
-    write_header = True
-    house_progress = ProgressBar("构造预测样本", total=len(base_files), unit="家庭")
+    metadata_path = output_dir / "forecast_samples.csv"
+    feature_path, target_path = _resolve_array_paths(metadata_path)
 
+    total_samples = 0
+    for base_file in base_files:
+        base_df = load_base_file(base_file)
+        complete_days_df = select_complete_days(base_df)
+        if complete_days_df.empty:
+            continue
+        day_groups = [
+            (date_value, day_df.copy())
+            for date_value, day_df in complete_days_df.groupby("date", sort=True)
+        ]
+        total_samples += len(_iter_valid_windows(day_groups))
+
+    if total_samples == 0:
+        raise ValueError("基础数据中没有可用于预测任务的完整连续窗口样本")
+
+    feature_store = np.lib.format.open_memmap(
+        feature_path,
+        mode="w+",
+        dtype=np.float32,
+        shape=(total_samples, INPUT_LENGTH, len(ALL_FEATURE_NAMES)),
+    )
+    target_store = np.lib.format.open_memmap(
+        target_path,
+        mode="w+",
+        dtype=np.float32,
+        shape=(total_samples, TARGET_LENGTH),
+    )
+
+    write_header = True
+    row_index = 0
+    house_progress = ProgressBar("构造预测样本", total=len(base_files), unit="家庭")
     for base_file in base_files:
         base_df = load_base_file(base_file)
         complete_days_df = select_complete_days(base_df)
@@ -133,37 +202,33 @@ def build_forecast_dataset(base_dir: Path, output_dir: Path) -> pd.DataFrame:
             for date_value, day_df in complete_days_df.groupby("date", sort=True)
         ]
         generated_count = 0
-        house_sample_records: list[dict[str, object]] = []
-        for start_index in range(len(day_groups) - 3):
-            window = day_groups[start_index : start_index + 4]
-            dates = [day for day, _ in window]
-            if any(dates[offset + 1] - dates[offset] != timedelta(days=1) for offset in range(3)):
-                continue
-
-            input_days = window[:3]
-            target_day = window[3]
-            sample_record = _build_forecast_record(
+        house_metadata_rows: list[dict[str, object]] = []
+        for input_days, target_day in _iter_valid_windows(day_groups):
+            sample_metadata, feature_array, target_array = _build_forecast_sample(
                 house_id=house_id,
                 input_days=input_days,
                 target_day=target_day,
             )
-            house_sample_records.append(sample_record)
-            summary_records.append(
-                {
-                    "sample_id": str(sample_record["sample_id"]),
-                    "house_id": house_id,
-                    "input_start": str(sample_record["input_start"]),
-                    "target_start": str(sample_record["target_start"]),
-                }
-            )
+            sample_metadata["row_index"] = row_index
+            house_metadata_rows.append(sample_metadata)
+            feature_store[row_index] = feature_array
+            target_store[row_index] = target_array
+            row_index += 1
             generated_count += 1
 
-        write_header = _write_rows(house_sample_records, forecast_path, write_header)
+        write_header = _write_rows(house_metadata_rows, metadata_path, write_header)
         house_progress.update(detail=f"{house_id}，样本数 {generated_count}")
     house_progress.finish()
 
-    if not summary_records:
-        raise ValueError("基础数据中没有可用于预测任务的完整连续窗口样本")
+    if row_index != total_samples:
+        raise RuntimeError(
+            f"预测样本写入数量异常，预估 {total_samples}，实际 {row_index}"
+        )
 
-    forecast_df = pd.DataFrame(summary_records).sort_values(["house_id", "input_start"]).reset_index(drop=True)
-    return forecast_df
+    feature_store.flush()
+    target_store.flush()
+    forecast_df = pd.read_csv(
+        metadata_path,
+        usecols=["sample_id", "house_id", "input_start", "target_start"],
+    )
+    return forecast_df.sort_values(["house_id", "input_start"]).reset_index(drop=True)

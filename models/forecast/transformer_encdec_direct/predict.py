@@ -1,4 +1,4 @@
-"""Patch-based direct Transformer 预测推理入口。"""
+"""Patch encoder-decoder direct Transformer 预测推理入口。"""
 
 from __future__ import annotations
 
@@ -18,7 +18,16 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(current_dir))
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+    from constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
     from config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from dataset import (
+        DEFAULT_NORMALIZATION_MODE,
+        FEATURE_COLUMN_MAP,
+        FEATURE_PAYLOAD_FIELD_MAP,
+        LEGACY_NORMALIZATION_MODE,
+        ForecastNormalizationStats,
+        build_temporal_feature_sequences,
+    )
     from engine import (
         build_model,
         checkpoint_to_normalization,
@@ -26,22 +35,22 @@ if __package__ is None or __package__ == "":
         save_json_summary,
     )
 else:
+    from .constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
     from .config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
+    from .dataset import (
+        DEFAULT_NORMALIZATION_MODE,
+        FEATURE_COLUMN_MAP,
+        FEATURE_PAYLOAD_FIELD_MAP,
+        LEGACY_NORMALIZATION_MODE,
+        ForecastNormalizationStats,
+        build_temporal_feature_sequences,
+    )
     from .engine import (
         build_model,
         checkpoint_to_normalization,
         load_checkpoint,
         save_json_summary,
     )
-from forecast.LSTM.constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
-from forecast.LSTM.dataset import (
-    DEFAULT_NORMALIZATION_MODE,
-    FEATURE_COLUMN_MAP,
-    FEATURE_PAYLOAD_FIELD_MAP,
-    LEGACY_NORMALIZATION_MODE,
-    ForecastNormalizationStats,
-    build_temporal_feature_sequences,
-)
 
 
 class PredictionDataset(Dataset[tuple[torch.Tensor, int]]):
@@ -130,13 +139,13 @@ def _build_feature_array(
 ) -> np.ndarray:
     aggregate = feature_values.get("aggregate")
     if aggregate is None or len(aggregate) != INPUT_LENGTH:
-        raise ValueError("aggregate 输入序列长度必须为 288")
+        raise ValueError(f"aggregate 输入序列长度必须为 {INPUT_LENGTH}")
 
     feature_arrays: list[np.ndarray] = []
     for feature_name in feature_names:
         values = feature_values.get(feature_name)
         if values is None or len(values) != INPUT_LENGTH:
-            raise ValueError(f"{feature_name} 输入序列长度必须为 288")
+            raise ValueError(f"{feature_name} 输入序列长度必须为 {INPUT_LENGTH}")
         feature_arrays.append(np.asarray(values, dtype=np.float32))
 
     features = np.stack(feature_arrays, axis=-1)
@@ -399,7 +408,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="执行 patch-based direct multi-step Transformer 推理"
+        description="执行 patch encoder-decoder direct Transformer 推理"
     )
     parser.add_argument("--input", type=Path, required=True, help="输入 csv 或 json 路径")
     parser.add_argument(

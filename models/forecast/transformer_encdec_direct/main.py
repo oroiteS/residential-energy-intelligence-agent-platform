@@ -1,4 +1,4 @@
-"""Patch-based direct multi-step Transformer 预测统一入口。"""
+"""Patch encoder-decoder direct Transformer 预测统一入口。"""
 
 from __future__ import annotations
 
@@ -25,16 +25,16 @@ else:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Patch-based direct multi-step Transformer 预测任务统一入口，"
+            "Patch encoder-decoder direct Transformer 预测任务统一入口，"
             "可选择训练、测试或推理模式。"
         ),
         epilog=(
             "常用命令示例:\n"
-            "  python forecast/transformer_direct/main.py train\n"
-            "  python forecast/transformer_direct/main.py test\n"
-            "  python forecast/transformer_direct/main.py predict --input forecast/transformer_direct/output/predict_input.json\n"
-            "  python forecast/transformer_direct/main.py train --config forecast/transformer_direct/configs/config.yaml\n"
-            "  python forecast/transformer_direct/main.py predict --input data.csv --output forecast/transformer_direct/output/prediction.csv"
+            "  python forecast/transformer_encdec_direct/main.py train\n"
+            "  python forecast/transformer_encdec_direct/main.py test\n"
+            "  python forecast/transformer_encdec_direct/main.py predict --input forecast/transformer_encdec_direct/output/predict_input.json\n"
+            "  python forecast/transformer_encdec_direct/main.py train --config forecast/transformer_encdec_direct/configs/config.yaml\n"
+            "  python forecast/transformer_encdec_direct/main.py predict --input data.csv --output forecast/transformer_encdec_direct/output/prediction.csv"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -42,9 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     train_parser = subparsers.add_parser(
         "train",
-        help="训练 patch-based direct Transformer 预测模型",
+        help="训练 patch encoder-decoder direct Transformer 预测模型",
         description=(
-            "读取 yaml 配置，训练 patch-based direct multi-step "
+            "读取 yaml 配置，训练 patch encoder-decoder direct "
             "Transformer 并保存最优权重。"
         ),
     )
@@ -57,9 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     test_parser = subparsers.add_parser(
         "test",
-        help="测试 patch-based direct Transformer 预测模型",
+        help="测试 patch encoder-decoder direct Transformer 预测模型",
         description=(
-            "读取 yaml 配置和 checkpoint，对 patch-based direct "
+            "读取 yaml 配置和 checkpoint，对 patch encoder-decoder direct "
             "multi-step Transformer 在测试集上执行评估。"
         ),
     )
@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     predict_parser = subparsers.add_parser(
         "predict",
-        help="执行 patch-based direct Transformer 预测推理",
+        help="执行 patch encoder-decoder direct Transformer 预测推理",
         description=(
             "读取 checkpoint，对单样本 json 或批量 csv 执行"
             "direct multi-step 多步预测。"

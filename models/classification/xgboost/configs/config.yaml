@@ -9,10 +9,10 @@ data:
 
 # 模型结构配置
 model:
-  # 类别数固定为 4
-  num_classes: 4
+  # 类别数；设为 0 表示训练时根据数据中的 label_name 自动推断
+  num_classes: 0
   # 最大 boosting 轮数
-  num_boost_round: 500
+  num_boost_round: 2000
   # 学习率
   learning_rate: 0.05
   # 树深度
@@ -39,13 +39,15 @@ model:
 # 训练配置
 train:
   # 训练输出目录，保存 best_model.json、model_metadata.json 和 training_summary.json
-  output_dir: "classification/XGBoost/output"
+  output_dir: "classification/xgboost/output"
   # 随机种子，保证可复现
   seed: 42
   # 训练监控指标
   eval_metric: "mlogloss"
   # 早停轮数
-  early_stopping_rounds: 30
+  early_stopping_rounds: 20
+  # 验证集指标至少要改善这么多才算“真正提升”，避免因为极小抖动一直跑满
+  early_stopping_min_delta: 0.0005
   # 日志打印间隔；设为 false 可关闭
   verbose_eval: 20
 
@@ -54,11 +56,11 @@ test:
   # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.json
   checkpoint_path: null
   # 测试输出目录，保存 test_summary.json
-  output_dir: "classification/XGBoost/output"
+  output_dir: "classification/xgboost/output"
 
 # 推理配置
 predict:
   # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.json
   checkpoint_path: null
   # 推理输出目录，保存 prediction_results.csv 或 single_prediction.json
-  output_dir: "classification/XGBoost/output"
+  output_dir: "classification/xgboost/output"

@@ -1,6 +1,6 @@
 # 数据相关配置
 data:
-  # 预测样本文件路径，由预处理阶段生成
+  # 预测样本元数据索引路径；build-forecast 会在同目录生成配套的 _features.npy / _targets.npy
   data_path: "data/processed/forecast/forecast_samples.csv"
   # 切分模式：默认按家庭切分，评估新家庭泛化能力；random 仅建议用于开发阶段冒烟
   split_mode: "by_house"
@@ -15,6 +15,8 @@ data:
     - "slot_cos"
     - "weekday_sin"
     - "weekday_cos"
+    - "active_appliance_count"
+    - "burst_event_count"
   # aggregate 默认用输入窗口自身统计量做样本级归一化，更适合跨家庭泛化
   aggregate_normalization: "input_window"
   # 归一化安全下界，避免标准差过小导致数值不稳定
@@ -23,18 +25,18 @@ data:
 # 模型结构配置
 model:
   # 输入特征维度，必须与 data.feature_names 长度一致
-  input_size: 5
+  input_size: 7
   # 中间隐藏维度
-  d_model: 128
+  d_model: 256
   # Transformer block 层数
-  num_layers: 2
+  num_layers: 3
   # 多头注意力头数
-  num_heads: 4
+  num_heads: 8
   # 前馈层隐藏维度
   ffn_dim: 512
   # dropout 比例
   dropout: 0.2
-  # 预测步长，当前固定为 96
+  # 预测步长，当前固定为 1 天，即 96 个 15min 点
   target_length: 96
   # patch 长度，16 个 15min 点约等于 4 小时
   patch_length: 16
@@ -44,11 +46,11 @@ model:
 # 训练配置
 train:
   # 训练输出目录，保存 best_model.pt、training_summary.json 和 result.png
-  output_dir: "forecast/transformer_direct/output"
+  output_dir: "forecast/transformer_encoder_direct/output"
   # 每个 batch 的样本数；若显存不足可降到 32
   batch_size: 32
   # 训练轮数
-  epochs: 100
+  epochs: 300
   # AdamW 学习率
   learning_rate: 0.0002
   # AdamW 权重衰减系数
@@ -79,7 +81,7 @@ test:
   # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.pt
   checkpoint_path: null
   # 测试输出目录，保存 test_summary.json
-  output_dir: "forecast/transformer_direct/output"
+  output_dir: "forecast/transformer_encoder_direct/output"
   # 测试时的 batch 大小
   batch_size: 256
 
@@ -88,6 +90,6 @@ predict:
   # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.pt
   checkpoint_path: null
   # 推理输出目录，保存 prediction.csv 或 prediction.json
-  output_dir: "forecast/transformer_direct/output"
+  output_dir: "forecast/transformer_encoder_direct/output"
   # 批量推理时的 batch 大小
   batch_size: 256

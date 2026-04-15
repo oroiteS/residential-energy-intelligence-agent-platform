@@ -1,0 +1,37 @@
+# 数据相关配置
+data:
+  # 聚类输入文件路径，对应 build-classification 生成的日级特征文件
+  data_path: "data/processed/classification/classification_day_features.csv"
+
+# 聚类配置
+clustering:
+  # KMeans 的簇数
+  n_clusters: 4
+  # 曲线归一化方式：none / sample_zscore / sample_minmax / day_mean
+  normalization_mode: "sample_zscore"
+  # 随机种子
+  random_seed: 42
+  # 不同初始化次数，取 inertia 最优结果
+  n_init: 5
+  # 单次初始化最大迭代轮数
+  max_iter: 100
+  # 收敛阈值
+  tol: 1.0e-4
+
+# 输出配置
+output:
+  # 聚类分析产物输出目录
+  output_dir: "data/processed/classification/kmeans"
+  # 每个簇保留多少个代表样本
+  representatives_per_cluster: 5
+
+# 重新打标配置
+relabel:
+  # fit 之后会自动生成映射模板，人工修改后供 relabel 使用
+  mapping_path: "data/processed/classification/kmeans/cluster_label_mapping.yaml"
+  # 保存在 kmeans 子目录下的完整带标签特征文件
+  labeled_features_filename: "cluster_labeled_day_features.csv"
+  # 保存在 kmeans 子目录下的 labels-only 文件
+  labeled_labels_filename: "cluster_labeled_day_labels.csv"
+  # 正式分类训练文件路径，供 XGBoost / TCN 等下游模块直接使用
+  canonical_labeled_path: "data/processed/classification/classification_day_labels.csv"

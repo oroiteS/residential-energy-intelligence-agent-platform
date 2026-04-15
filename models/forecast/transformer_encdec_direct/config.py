@@ -1,4 +1,4 @@
-"""LSTM 预测任务配置加载。"""
+"""Patch encoder-decoder direct Transformer 预测任务配置加载。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ import yaml
 
 from common.config_validation import validate_config_schema
 from common.device import detect_device
-from forecast.LSTM.constants import ALL_FEATURE_NAMES, TARGET_LENGTH
+try:
+    from .constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
+except ImportError:
+    from constants import ALL_FEATURE_NAMES, INPUT_LENGTH, TARGET_LENGTH
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "config.yaml"
@@ -26,11 +29,14 @@ SECTION_KEYS = {
     },
     "model": {
         "input_size",
-        "hidden_size",
+        "d_model",
         "num_layers",
+        "num_heads",
+        "ffn_dim",
         "dropout",
         "target_length",
-        "teacher_forcing_ratio",
+        "patch_length",
+        "patch_stride",
     },
     "train": {
         "output_dir",
@@ -44,6 +50,10 @@ SECTION_KEYS = {
         "early_stopping_min_delta",
         "loss_name",
         "huber_delta",
+        "scheduler_mode",
+        "scheduler_factor",
+        "scheduler_patience",
+        "scheduler_min_lr",
     },
     "test": {"checkpoint_path", "output_dir", "batch_size"},
     "predict": {"checkpoint_path", "output_dir", "batch_size"},
@@ -64,11 +74,14 @@ class DataConfig:
 @dataclass(slots=True)
 class ModelConfig:
     input_size: int
-    hidden_size: int
+    d_model: int
     num_layers: int
+    num_heads: int
+    ffn_dim: int
     dropout: float
     target_length: int
-    teacher_forcing_ratio: float
+    patch_length: int
+    patch_stride: int
 
 
 @dataclass(slots=True)
@@ -84,6 +97,10 @@ class TrainConfig:
     early_stopping_min_delta: float
     loss_name: str
     huber_delta: float
+    scheduler_mode: str
+    scheduler_factor: float
+    scheduler_patience: int
+    scheduler_min_lr: float
 
 
 @dataclass(slots=True)
@@ -175,19 +192,20 @@ def load_experiment_config(
                 len(data_config.feature_names),
             )
         ),
-        hidden_size=int(model_raw.get("hidden_size", 128)),
-        num_layers=int(model_raw.get("num_layers", 2)),
-        dropout=float(model_raw.get("dropout", 0.2)),
+        d_model=int(model_raw.get("d_model", 256)),
+        num_layers=int(model_raw.get("num_layers", 6)),
+        num_heads=int(model_raw.get("num_heads", 4)),
+        ffn_dim=int(model_raw.get("ffn_dim", 1024)),
+        dropout=float(model_raw.get("dropout", 0.1)),
         target_length=int(model_raw.get("target_length", TARGET_LENGTH)),
-        teacher_forcing_ratio=float(
-            model_raw.get("teacher_forcing_ratio", 0.5)
-        ),
+        patch_length=int(model_raw.get("patch_length", 16)),
+        patch_stride=int(model_raw.get("patch_stride", 8)),
     )
     train_config = TrainConfig(
         output_dir=_resolve_path(train_raw["output_dir"], base_dir),
-        batch_size=int(train_raw.get("batch_size", 128)),
-        epochs=int(train_raw.get("epochs", 20)),
-        learning_rate=float(train_raw.get("learning_rate", 1e-3)),
+        batch_size=int(train_raw.get("batch_size", 64)),
+        epochs=int(train_raw.get("epochs", 60)),
+        learning_rate=float(train_raw.get("learning_rate", 2e-4)),
         weight_decay=float(train_raw.get("weight_decay", 1e-4)),
         gradient_clip_norm=(
             None
@@ -196,13 +214,17 @@ def load_experiment_config(
         ),
         seed=int(train_raw.get("seed", 42)),
         early_stopping_patience=int(
-            train_raw.get("early_stopping_patience", 10)
+            train_raw.get("early_stopping_patience", 20)
         ),
         early_stopping_min_delta=float(
             train_raw.get("early_stopping_min_delta", 0.0)
         ),
         loss_name=str(train_raw.get("loss_name", "huber")),
         huber_delta=float(train_raw.get("huber_delta", 1.0)),
+        scheduler_mode=str(train_raw.get("scheduler_mode", "plateau")),
+        scheduler_factor=float(train_raw.get("scheduler_factor", 0.5)),
+        scheduler_patience=int(train_raw.get("scheduler_patience", 5)),
+        scheduler_min_lr=float(train_raw.get("scheduler_min_lr", 1e-5)),
     )
     test_checkpoint = test_raw.get("checkpoint_path")
     test_config = TestConfig(
@@ -222,7 +244,10 @@ def load_experiment_config(
             if predict_checkpoint
             else None
         ),
-        output_dir=_resolve_path(predict_raw["output_dir"], base_dir),
+        output_dir=_resolve_path(
+            predict_raw.get("output_dir", str(train_config.output_dir)),
+            base_dir,
+        ),
         batch_size=int(
             predict_raw.get("batch_size", train_config.batch_size)
         ),
@@ -248,13 +273,33 @@ def load_experiment_config(
             "配置错误：aggregate_normalization 只支持 input_window 或 global"
         )
     if model_config.input_size != len(data_config.feature_names):
+        raise ValueError("配置错误：model.input_size 必须等于 feature_names 长度")
+    if model_config.d_model <= 0 or model_config.ffn_dim <= 0:
+        raise ValueError("配置错误：d_model 和 ffn_dim 必须大于 0")
+    if model_config.num_layers <= 0 or model_config.num_heads <= 0:
+        raise ValueError("配置错误：num_layers 和 num_heads 必须大于 0")
+    if model_config.d_model % model_config.num_heads != 0:
+        raise ValueError("配置错误：d_model 必须能被 num_heads 整除")
+    if model_config.patch_length <= 0 or model_config.patch_stride <= 0:
+        raise ValueError("配置错误：patch_length 和 patch_stride 必须大于 0")
+    if model_config.patch_length > INPUT_LENGTH:
         raise ValueError(
-            "配置错误：model.input_size 必须等于 feature_names 长度"
+            f"配置错误：patch_length 不能大于输入长度 {INPUT_LENGTH}"
         )
+    if model_config.target_length != TARGET_LENGTH:
+        raise ValueError(f"配置错误：target_length 当前固定为 {TARGET_LENGTH}")
     if train_config.loss_name.lower() not in {"mse", "huber"}:
         raise ValueError("配置错误：loss_name 只支持 mse 或 huber")
     if train_config.huber_delta <= 0:
         raise ValueError("配置错误：huber_delta 必须大于 0")
+    if train_config.scheduler_mode not in {"none", "plateau"}:
+        raise ValueError("配置错误：scheduler_mode 只支持 none 或 plateau")
+    if not 0 < train_config.scheduler_factor < 1:
+        raise ValueError("配置错误：scheduler_factor 必须在 0 和 1 之间")
+    if train_config.scheduler_patience < 0:
+        raise ValueError("配置错误：scheduler_patience 不能小于 0")
+    if train_config.scheduler_min_lr < 0:
+        raise ValueError("配置错误：scheduler_min_lr 不能小于 0")
     if (
         train_config.gradient_clip_norm is not None
         and train_config.gradient_clip_norm <= 0

@@ -12,12 +12,20 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from forecast.LSTM.constants import (
-    ALL_FEATURE_NAMES,
-    INPUT_LENGTH,
-    STEPS_PER_DAY,
-    TARGET_LENGTH,
-)
+try:
+    from .constants import (
+        ALL_FEATURE_NAMES,
+        INPUT_LENGTH,
+        STEPS_PER_DAY,
+        TARGET_LENGTH,
+    )
+except ImportError:
+    from constants import (
+        ALL_FEATURE_NAMES,
+        INPUT_LENGTH,
+        STEPS_PER_DAY,
+        TARGET_LENGTH,
+    )
 
 
 T = TypeVar("T")

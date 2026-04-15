@@ -1,4 +1,4 @@
-"""Patch-based direct multi-step Transformer 预测测试入口。"""
+"""Patch encoder-decoder direct Transformer 预测测试入口。"""
 
 from __future__ import annotations
 
@@ -22,11 +22,12 @@ if __package__ is None or __package__ == "":
         create_eval_loader,
         create_split_datasets,
         describe_loss,
-        evaluate,
+        evaluate_with_predictions,
         load_checkpoint,
         save_json_summary,
         set_seed,
     )
+    from forecast.test_plots import plot_test_diagnostics
 else:
     from .config import DEFAULT_CONFIG_PATH, detect_device, load_experiment_config
     from .engine import (
@@ -36,11 +37,12 @@ else:
         create_eval_loader,
         create_split_datasets,
         describe_loss,
-        evaluate,
+        evaluate_with_predictions,
         load_checkpoint,
         save_json_summary,
         set_seed,
     )
+    from forecast.test_plots import plot_test_diagnostics
 
 
 def run_test(experiment_config) -> dict[str, object]:
@@ -76,8 +78,19 @@ def run_test(experiment_config) -> dict[str, object]:
     loss_name = describe_loss(train_config)
 
     start_time = time.time()
-    metrics = evaluate(model, test_loader, criterion, device)
+    metrics, predictions, targets = evaluate_with_predictions(
+        model,
+        test_loader,
+        criterion,
+        device,
+        stage_label="测试",
+    )
     metrics["elapsed_seconds"] = time.time() - start_time
+    artifacts = plot_test_diagnostics(
+        predictions=predictions,
+        targets=targets,
+        output_dir=test_config.output_dir,
+    )
 
     summary = {
         "checkpoint_path": str(checkpoint_path),
@@ -88,6 +101,7 @@ def run_test(experiment_config) -> dict[str, object]:
             "loss": loss_name,
             "aggregate_normalization": normalization.aggregate_mode,
         },
+        "artifacts": artifacts,
     }
     save_json_summary(test_config.output_dir / "test_summary.json", summary)
 
