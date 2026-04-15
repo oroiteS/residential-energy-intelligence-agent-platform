@@ -1,26 +1,18 @@
 # 分类模型本地推理配置
 
 data:
-  feature_names:
-    - "aggregate"
-    - "slot_sin"
-    - "slot_cos"
-    - "weekday_sin"
-    - "weekday_cos"
+  labels:
+    - "daytime_active"
+    - "daytime_peak_strong"
+    - "flat_stable"
+    - "night_dominant"
 
 model:
-  input_channels: 5
-  num_classes: 4
-  channel_sizes:
-    - 32
-    - 64
-    - 128
-  kernel_size: 3
-  dropout: 0.2
+  num_boost_round: 2000
 
 train:
-  output_dir: "../models_agent/checkpoints/classification/tcn"
+  output_dir: "../models_agent/checkpoints/classification/xgboost"
 
 predict:
-  checkpoint_path: "../models_agent/checkpoints/classification/tcn/best_model.pt"
+  checkpoint_path: "../models_agent/checkpoints/classification/xgboost/best_model.json"
   batch_size: 128

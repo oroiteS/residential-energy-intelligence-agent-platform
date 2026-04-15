@@ -9,13 +9,13 @@ import random
 import numpy as np
 import pandas as pd
 
-from classification.TCN.dataset import AGGREGATE_COLUMNS
-from classification.XGBoost.constants import BLOCK_SIZE, LABELS, NUM_BLOCKS, TABULAR_FEATURE_NAMES
+from classification.xgboost.constants import (
+    AGGREGATE_COLUMNS,
+    BLOCK_SIZE,
+    NUM_BLOCKS,
+    TABULAR_FEATURE_NAMES,
+)
 from data.process.common.constants import DAY_END_SLOT, DAY_START_SLOT
-
-
-LABEL_TO_INDEX = {label: index for index, label in enumerate(LABELS)}
-INDEX_TO_LABEL = {index: label for label, index in LABEL_TO_INDEX.items()}
 
 
 @dataclass(slots=True)
@@ -25,6 +25,28 @@ class TabularClassificationSample:
     date: str
     features: np.ndarray
     label_index: int | None = None
+
+
+@dataclass(slots=True)
+class LabelVocabulary:
+    label_names: list[str]
+
+    @property
+    def label_to_index(self) -> dict[str, int]:
+        return {label: index for index, label in enumerate(self.label_names)}
+
+    @property
+    def index_to_label(self) -> dict[int, str]:
+        return {index: label for index, label in enumerate(self.label_names)}
+
+
+def infer_label_vocabulary(data_frame: pd.DataFrame) -> LabelVocabulary:
+    if "label_name" not in data_frame.columns:
+        raise ValueError("训练数据缺少 label_name 字段，无法推断标签体系")
+    label_names = sorted({str(value).strip() for value in data_frame["label_name"].tolist()})
+    if not label_names:
+        raise ValueError("训练数据中的标签集合为空")
+    return LabelVocabulary(label_names=label_names)
 
 
 def _safe_ratio(numerator: float, denominator: float, epsilon: float = 1e-6) -> float:
@@ -134,8 +156,10 @@ def _validate_columns(data_frame: pd.DataFrame, require_label: bool) -> None:
 def _build_samples_from_frame(
     data_frame: pd.DataFrame,
     require_label: bool,
+    label_vocabulary: LabelVocabulary | None = None,
 ) -> list[TabularClassificationSample]:
     _validate_columns(data_frame, require_label=require_label)
+    label_to_index = label_vocabulary.label_to_index if label_vocabulary is not None else {}
     samples: list[TabularClassificationSample] = []
     for row in data_frame.itertuples(index=False):
         aggregate = np.asarray(
@@ -146,9 +170,9 @@ def _build_samples_from_frame(
         label_index: int | None = None
         if require_label:
             label_name = str(row.label_name)
-            if label_name not in LABEL_TO_INDEX:
+            if label_name not in label_to_index:
                 raise ValueError(f"未知分类标签: {label_name}")
-            label_index = LABEL_TO_INDEX[label_name]
+            label_index = label_to_index[label_name]
         samples.append(
             TabularClassificationSample(
                 sample_id=str(row.sample_id),
@@ -163,7 +187,12 @@ def _build_samples_from_frame(
 
 def load_training_samples(data_path: Path) -> list[TabularClassificationSample]:
     data_frame = pd.read_csv(data_path)
-    return _build_samples_from_frame(data_frame, require_label=True)
+    label_vocabulary = infer_label_vocabulary(data_frame)
+    return _build_samples_from_frame(
+        data_frame,
+        require_label=True,
+        label_vocabulary=label_vocabulary,
+    )
 
 
 def load_prediction_samples(data_frame: pd.DataFrame) -> list[TabularClassificationSample]:

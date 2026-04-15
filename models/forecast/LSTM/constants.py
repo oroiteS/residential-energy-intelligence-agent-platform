@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-INPUT_LENGTH = 288
-TARGET_LENGTH = 96
+STEPS_PER_DAY = 96
+INPUT_DAYS = 7
+TARGET_DAYS = 1
+INPUT_LENGTH = INPUT_DAYS * STEPS_PER_DAY
+TARGET_LENGTH = TARGET_DAYS * STEPS_PER_DAY
 ALL_FEATURE_NAMES = (
     "aggregate",
     "active_appliance_count",

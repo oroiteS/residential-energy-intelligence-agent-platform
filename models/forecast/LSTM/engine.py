@@ -98,6 +98,7 @@ def create_split_datasets(
 
     train_dataset = ForecastDataset(
         train_samples,
+        data_path=data_config.data_path,
         feature_names=data_config.feature_names,
         normalization=normalization,
         aggregate_mode=data_config.aggregate_normalization,
@@ -109,6 +110,7 @@ def create_split_datasets(
 
     val_dataset = ForecastDataset(
         val_samples,
+        data_path=data_config.data_path,
         feature_names=data_config.feature_names,
         normalization=reference_normalization,
         aggregate_mode=data_config.aggregate_normalization,
@@ -116,6 +118,7 @@ def create_split_datasets(
     )
     test_dataset = ForecastDataset(
         test_samples,
+        data_path=data_config.data_path,
         feature_names=data_config.feature_names,
         normalization=reference_normalization,
         aggregate_mode=data_config.aggregate_normalization,

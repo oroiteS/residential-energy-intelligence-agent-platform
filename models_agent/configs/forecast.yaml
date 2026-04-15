@@ -9,33 +9,54 @@ data:
     - "slot_cos"
     - "weekday_sin"
     - "weekday_cos"
+    - "active_appliance_count"
+    - "burst_event_count"
   aggregate_normalization: "input_window"
   aggregate_norm_eps: 1.0e-6
 
 lstm:
   train_output_dir: "../models_agent/checkpoints/forecast/lstm"
   model:
-    input_size: 5
+    input_size: 7
     hidden_size: 256
     num_layers: 3
     dropout: 0.2
     target_length: 96
+    input_length: 672
   predict:
     checkpoint_path: "../models_agent/checkpoints/forecast/lstm/best_model.pt"
     batch_size: 128
 
-transformer:
-  train_output_dir: "../models_agent/checkpoints/forecast/transformer"
+transformer_encoder_direct:
+  train_output_dir: "../models_agent/checkpoints/forecast/transformer_encoder_direct"
   model:
-    input_size: 5
-    d_model: 128
-    num_layers: 2
-    num_heads: 4
+    input_size: 7
+    d_model: 256
+    num_layers: 3
+    num_heads: 8
     ffn_dim: 512
     dropout: 0.2
     target_length: 96
     patch_length: 16
     patch_stride: 8
+    input_length: 672
   predict:
-    checkpoint_path: "../models_agent/checkpoints/forecast/transformer/best_model.pt"
+    checkpoint_path: "../models_agent/checkpoints/forecast/transformer_encoder_direct/best_model.pt"
+    batch_size: 128
+
+transformer_encdec_direct:
+  train_output_dir: "../models_agent/checkpoints/forecast/transformer_encdec_direct"
+  model:
+    input_size: 7
+    d_model: 256
+    num_layers: 3
+    num_heads: 8
+    ffn_dim: 512
+    dropout: 0.2
+    target_length: 96
+    patch_length: 16
+    patch_stride: 8
+    input_length: 672
+  predict:
+    checkpoint_path: "../models_agent/checkpoints/forecast/transformer_encdec_direct/best_model.pt"
     batch_size: 128

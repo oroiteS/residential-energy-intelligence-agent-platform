@@ -1,0 +1,95 @@
+# 数据相关配置
+data:
+  # 预测样本元数据索引路径；build-forecast 会在同目录生成配套的 _features.npy / _targets.npy
+  data_path: "data/processed/forecast/forecast_samples.csv"
+  # 切分模式：默认按家庭切分，评估新家庭泛化能力；random 仅建议用于开发阶段冒烟
+  split_mode: "by_house"
+  # 训练集占比，剩余部分继续划分给验证集和测试集
+  train_ratio: 0.7
+  # 验证集占比，测试集占比 = 1 - train_ratio - val_ratio
+  val_ratio: 0.15
+  # 预测输入特征：aggregate + 稳定时间周期特征
+  feature_names:
+    - "aggregate"
+    - "slot_sin"
+    - "slot_cos"
+    - "weekday_sin"
+    - "weekday_cos"
+    - "active_appliance_count"
+    - "burst_event_count"
+  # aggregate 默认用输入窗口自身统计量做样本级归一化，更适合跨家庭泛化
+  aggregate_normalization: "input_window"
+  # 归一化安全下界，避免标准差过小导致数值不稳定
+  aggregate_norm_eps: 1.0e-6
+
+# 模型结构配置
+model:
+  # 输入特征维度，必须与 data.feature_names 长度一致
+  input_size: 7
+  # 中间隐藏维度
+  d_model: 256
+  # Transformer block 层数
+  num_layers: 3
+  # 多头注意力头数
+  num_heads: 8
+  # 前馈层隐藏维度
+  ffn_dim: 512
+  # dropout 比例
+  dropout: 0.2
+  # 预测步长，当前固定为 1 天，即 96 个 15min 点
+  target_length: 96
+  # patch 长度，16 个 15min 点约等于 4 小时
+  patch_length: 16
+  # patch 滑动步长，8 个 15min 点约等于 2 小时
+  patch_stride: 8
+
+# 训练配置
+train:
+  # 训练输出目录，保存 best_model.pt、training_summary.json 和 result.png
+  output_dir: "forecast/transformer_encoder_direct/output"
+  # 每个 batch 的样本数；若显存不足可降到 32
+  batch_size: 32
+  # 训练轮数
+  epochs: 300
+  # AdamW 学习率
+  learning_rate: 0.0002
+  # AdamW 权重衰减系数
+  weight_decay: 0.0001
+  # 梯度裁剪阈值；设为 null 表示关闭
+  gradient_clip_norm: 1.0
+  # 随机种子，保证可复现
+  seed: 42
+  # Early stopping 容忍轮数；给 direct multi-step 模型多一点收敛空间
+  early_stopping_patience: 25
+  # Early stopping 的最小改进阈值
+  early_stopping_min_delta: 0.0000
+  # 损失函数，支持 mse / huber
+  loss_name: "huber"
+  # HuberLoss 的 delta，仅在 loss_name=huber 时生效
+  huber_delta: 1.0
+  # 学习率调度器；plateau 表示验证集 RMSE 停滞时自动降学习率
+  scheduler_mode: "plateau"
+  # 学习率衰减系数，新学习率 = 旧学习率 * scheduler_factor
+  scheduler_factor: 0.5
+  # 验证集 RMSE 连续多少轮无改善后触发降学习率
+  scheduler_patience: 5
+  # 学习率下界
+  scheduler_min_lr: 1.0e-5
+
+# 测试配置
+test:
+  # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.pt
+  checkpoint_path: null
+  # 测试输出目录，保存 test_summary.json
+  output_dir: "forecast/transformer_encoder_direct/output"
+  # 测试时的 batch 大小
+  batch_size: 256
+
+# 推理配置
+predict:
+  # 指定 checkpoint 路径；为 null 时默认读取 train.output_dir/best_model.pt
+  checkpoint_path: null
+  # 推理输出目录，保存 prediction.csv 或 prediction.json
+  output_dir: "forecast/transformer_encoder_direct/output"
+  # 批量推理时的 batch 大小
+  batch_size: 256

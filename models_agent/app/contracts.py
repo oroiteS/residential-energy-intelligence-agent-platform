@@ -9,6 +9,18 @@ from typing import Any
 from app.errors import ValidationError
 
 
+AGENT_CONTEXT_OBJECT_KEYS = {
+    "dataset",
+    "analysis_summary",
+    "classification_result",
+    "forecast_summary",
+    "recent_history_summary",
+    "user_preferences",
+    "conversation_state",
+}
+AGENT_CONTEXT_LIST_KEYS = {"rule_advices"}
+
+
 @dataclass(slots=True)
 class TimeSeriesPoint:
     timestamp: str
@@ -56,6 +68,46 @@ def _load_series(payload: dict[str, Any]) -> list[TimeSeriesPoint]:
     return [TimeSeriesPoint.from_dict(item) for item in series]
 
 
+def _normalize_agent_context_payload(payload: Any) -> dict[str, Any]:
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValidationError("context 必须是对象")
+
+    normalized = dict(payload)
+
+    for key in AGENT_CONTEXT_OBJECT_KEYS:
+        value = normalized.get(key, {})
+        if value is None:
+            value = {}
+        if not isinstance(value, dict):
+            raise ValidationError(f"context.{key} 必须是对象")
+        normalized[key] = value
+
+    raw_rule_advices = normalized.get("rule_advices", [])
+    if raw_rule_advices is None:
+        raw_rule_advices = []
+    if not isinstance(raw_rule_advices, list):
+        raise ValidationError("context.rule_advices 必须是数组")
+
+    for index, item in enumerate(raw_rule_advices):
+        if not isinstance(item, (dict, str)):
+            raise ValidationError(
+                f"context.rule_advices[{index}] 只支持对象或字符串"
+            )
+    normalized["rule_advices"] = raw_rule_advices
+    try:
+        from app.agent.state import AgentContext
+    except ModuleNotFoundError:
+        return normalized
+
+    try:
+        validated_context = AgentContext.from_payload(normalized)
+    except Exception as exc:
+        raise ValidationError(f"context 结构不合法: {exc}") from exc
+    return validated_context.model_dump()
+
+
 @dataclass(slots=True)
 class PredictRequest:
     model_type: str
@@ -69,7 +121,7 @@ class PredictRequest:
     def from_dict(cls, payload: dict[str, Any]) -> "PredictRequest":
         metadata = payload.get("metadata", {}) or {}
         return cls(
-            model_type=str(payload.get("model_type", "tcn")),
+            model_type=str(payload.get("model_type", "xgboost")),
             dataset_id=int(payload["dataset_id"]),
             window=Window.from_dict(payload.get("window", {})),
             series=_load_series(payload),
@@ -139,9 +191,7 @@ class AgentAskRequest:
         if not isinstance(history_payload, list):
             raise ValidationError("history 必须是数组")
 
-        context_payload = payload.get("context", {}) or {}
-        if not isinstance(context_payload, dict):
-            raise ValidationError("context 必须是对象")
+        context_payload = _normalize_agent_context_payload(payload.get("context", {}))
 
         return cls(
             dataset_id=int(payload["dataset_id"]),
@@ -159,9 +209,7 @@ class AgentReportSummaryRequest:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "AgentReportSummaryRequest":
-        context_payload = payload.get("context", {}) or {}
-        if not isinstance(context_payload, dict):
-            raise ValidationError("context 必须是对象")
+        context_payload = _normalize_agent_context_payload(payload.get("context", {}))
 
         return cls(
             dataset_id=int(payload["dataset_id"]),

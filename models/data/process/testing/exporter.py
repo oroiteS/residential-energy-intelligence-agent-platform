@@ -13,12 +13,6 @@ import yaml
 
 from data.process.common.base import select_complete_days
 
-LABEL_SCENARIOS = (
-    "day_high_night_low",
-    "day_low_night_high",
-    "all_day_high",
-    "all_day_low",
-)
 MODELS_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -164,10 +158,16 @@ def _load_labels(labels_path: Path) -> pd.DataFrame:
     if not labels_path.exists():
         raise FileNotFoundError(f"未找到分类标签文件: {labels_path}")
 
-    labels_df = pd.read_csv(
-        labels_path,
-        usecols=["house_id", "date", "label_name", "day_mean", "night_mean", "full_mean"],
-    )
+    labels_df = pd.read_csv(labels_path)
+    required_columns = {"house_id", "date", "label_name"}
+    missing_columns = required_columns.difference(labels_df.columns)
+    if missing_columns:
+        raise ValueError(f"分类标签文件缺少必要字段: {sorted(missing_columns)}")
+
+    keep_columns = ["house_id", "date", "label_name"]
+    if "cluster_id" in labels_df.columns:
+        keep_columns.append("cluster_id")
+    labels_df = labels_df.loc[:, keep_columns].copy()
     labels_df["house_id"] = labels_df["house_id"].astype(str)
     labels_df["date"] = pd.to_datetime(labels_df["date"]).dt.date
     return labels_df
@@ -282,6 +282,14 @@ def _pick_label_day(
     }
 
 
+def _list_label_scenarios(day_summary: pd.DataFrame) -> list[str]:
+    labeled_rows = day_summary.loc[day_summary["label_name"].notna(), "label_name"].astype(str)
+    if labeled_rows.empty:
+        return []
+    label_counts = labeled_rows.value_counts()
+    return label_counts.index.tolist()
+
+
 def _pick_by_ranking(
     day_summary: pd.DataFrame,
     selected_dates: set[date],
@@ -311,7 +319,7 @@ def _choose_scenarios(day_summary: pd.DataFrame, count: int) -> list[dict[str, o
     selections: list[dict[str, object]] = []
     selected_dates: set[date] = set()
 
-    for label_name in LABEL_SCENARIOS:
+    for label_name in _list_label_scenarios(day_summary):
         if len(selections) >= count:
             break
         picked = _pick_label_day(day_summary, label_name, selected_dates)

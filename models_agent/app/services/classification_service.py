@@ -7,36 +7,50 @@ from typing import Any
 from app.config import Settings
 from app.contracts import PredictRequest
 from app.errors import ServiceUnavailableError, ValidationError
-from app.inference.classification import FEATURE_NAMES, LABELS, SEQUENCE_LENGTH, predict_single_sample
+from app.inference.classification import (
+    FEATURE_NAMES,
+    LABEL_DISPLAY_NAMES,
+    LABELS,
+    SEQUENCE_LENGTH,
+    get_checkpoint_path,
+    predict_single_sample,
+)
 
 
 class ClassificationService:
-    """TCN 分类推理封装。"""
+    """XGBoost 分类推理封装。"""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     def health(self) -> dict[str, Any]:
-        checkpoint_path = self.settings.classification_config_path
+        checkpoint_path = get_checkpoint_path(self.settings.classification_config_path)
         return {
             "status": "up",
             "service": "python-robyn-backend",
             "model_loaded": checkpoint_path.exists(),
-            "classification_config_path": str(checkpoint_path),
+            "classification_config_path": str(self.settings.classification_config_path),
+            "classification_checkpoint_path": str(checkpoint_path),
         }
 
     def model_info(self) -> dict[str, Any]:
         return {
             "service_version": "v1",
-            "supported_models": ["tcn", "lstm", "transformer"],
+            "supported_models": [
+                "xgboost",
+                "lstm",
+                "transformer_encoder_direct",
+                "transformer_encdec_direct",
+            ],
             "classification": {
-                "supported_models": ["tcn"],
+                "supported_models": ["xgboost"],
                 "labels": LABELS,
                 "label_definitions": [
-                    {"key": "day_high_night_low", "display_name": "白天高晚上低型"},
-                    {"key": "day_low_night_high", "display_name": "白天低晚上高型"},
-                    {"key": "all_day_high", "display_name": "全天高负载型"},
-                    {"key": "all_day_low", "display_name": "全天低负载型"},
+                    {
+                        "key": label,
+                        "display_name": LABEL_DISPLAY_NAMES.get(label, label),
+                    }
+                    for label in LABELS
                 ],
                 "input_spec": {
                     "granularity": "15min",
@@ -50,10 +64,20 @@ class ClassificationService:
                     "min_history_length": SEQUENCE_LENGTH,
                     "feature_names": list(FEATURE_NAMES),
                     "temporal_features_from_timestamp": True,
+                    "derived_feature_count": 45,
+                },
+                "output_spec": {
+                    "predicted_label": "string",
+                    "confidence": "float",
+                    "probabilities": "map[string,float]",
                 },
             },
             "forecasting": {
-                "supported_models": ["lstm", "transformer"],
+                "supported_models": [
+                    "lstm",
+                    "transformer_encoder_direct",
+                    "transformer_encdec_direct",
+                ],
                 "request_mode": "time_range",
                 "supported_granularities": ["15min"],
                 "summary_schema": "ForecastSummary",
@@ -61,13 +85,25 @@ class ClassificationService:
                 "input_spec": {
                     "granularity": "15min",
                     "unit": "w",
-                    "history_window": {
-                        "unit": "day",
-                        "value": 3,
-                        "config_key": "model_history_window_config.forecast_history_days",
-                        "configurable": True,
+                    "history_window_by_model": {
+                        "lstm": {
+                            "unit": "day",
+                            "value": 7,
+                        },
+                        "transformer_encoder_direct": {
+                            "unit": "day",
+                            "value": 7,
+                        },
+                        "transformer_encdec_direct": {
+                            "unit": "day",
+                            "value": 7,
+                        },
                     },
-                    "min_history_length": 288,
+                    "min_history_length_by_model": {
+                        "lstm": 672,
+                        "transformer_encoder_direct": 672,
+                        "transformer_encdec_direct": 672,
+                    },
                     "target_length": 96,
                     "feature_names": [
                         "aggregate",
@@ -75,6 +111,8 @@ class ClassificationService:
                         "slot_cos",
                         "weekday_sin",
                         "weekday_cos",
+                        "active_appliance_count",
+                        "burst_event_count",
                     ],
                     "temporal_features_from_timestamp": True,
                 },
@@ -82,8 +120,8 @@ class ClassificationService:
         }
 
     def predict(self, request: PredictRequest) -> dict[str, Any]:
-        if request.model_type != "tcn":
-            raise ValidationError("当前分类接口仅支持 tcn")
+        if request.model_type != "xgboost":
+            raise ValidationError("当前分类接口仅支持 xgboost")
 
         if len(request.series) != SEQUENCE_LENGTH:
             raise ValidationError("分类输入序列长度必须为 96")
@@ -110,10 +148,9 @@ class ClassificationService:
             "date": request.window.start[:10],
             "predicted_label": str(result.get("predicted_label", "")),
             "confidence": float(result.get("confidence", 0.0)),
-            "prob_day_high_night_low": float(result.get("prob_day_high_night_low", 0.0)),
-            "prob_day_low_night_high": float(result.get("prob_day_low_night_high", 0.0)),
-            "prob_all_day_high": float(result.get("prob_all_day_high", 0.0)),
-            "prob_all_day_low": float(result.get("prob_all_day_low", 0.0)),
-            "runtime_device": str(result.get("runtime_device", "")),
-            "runtime_loss": str(result.get("runtime_loss", "")),
+            "probabilities": {
+                str(label): float(probability)
+                for label, probability in (result.get("probabilities", {}) or {}).items()
+            },
+            "runtime_library": str(result.get("runtime_library", "")),
         }

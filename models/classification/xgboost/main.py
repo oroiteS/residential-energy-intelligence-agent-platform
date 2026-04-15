@@ -9,10 +9,10 @@ import sys
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from classification.XGBoost.config import DEFAULT_CONFIG_PATH
-from classification.XGBoost.predict import main as predict_main
-from classification.XGBoost.test import main as test_main
-from classification.XGBoost.train import main as train_main
+from classification.xgboost.config import DEFAULT_CONFIG_PATH
+from classification.xgboost.predict import main as predict_main
+from classification.xgboost.test import main as test_main
+from classification.xgboost.train import main as train_main
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,10 +20,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="XGBoost 分类任务统一入口，可选择训练、测试或推理模式。",
         epilog=(
             "常用命令示例:\n"
-            "  python classification/XGBoost/main.py train\n"
-            "  python classification/XGBoost/main.py test\n"
-            "  python classification/XGBoost/main.py predict --input data/processed/classification/classification_day_features.csv\n"
-            "  python classification/XGBoost/main.py train --config classification/XGBoost/configs/config.yaml"
+            "  python classification/xgboost/main.py train\n"
+            "  python classification/xgboost/main.py test\n"
+            "  python classification/xgboost/main.py predict --input data/processed/classification/classification_day_features.csv\n"
+            "  python classification/xgboost/main.py train --config classification/xgboost/configs/config.yaml"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser = subparsers.add_parser(
         "train",
         help="训练 XGBoost 分类模型",
-        description="读取 yaml 配置，训练基于日级统计特征的 XGBoost 四分类模型。",
+        description="读取 yaml 配置，训练基于日级统计特征的 XGBoost 分类模型。",
     )
     train_parser.add_argument(
         "--config",

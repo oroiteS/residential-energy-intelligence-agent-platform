@@ -1,4 +1,4 @@
-"""预测推理实现，支持 LSTM 与 Transformer。"""
+"""预测推理实现，支持 LSTM 与两个独立 Transformer。"""
 
 from __future__ import annotations
 
@@ -12,10 +12,20 @@ import torch
 from torch import nn
 
 
-INPUT_LENGTH = 288
-TARGET_LENGTH = 96
+STEPS_PER_DAY = 96
+DEFAULT_LSTM_INPUT_LENGTH = 7 * STEPS_PER_DAY
+DEFAULT_TRANSFORMER_INPUT_LENGTH = 7 * STEPS_PER_DAY
+TARGET_LENGTH = STEPS_PER_DAY
 DEFAULT_NORMALIZATION_MODE = "input_window"
 LEGACY_NORMALIZATION_MODE = "global"
+SUPPORTED_FORECAST_MODEL_TYPES = (
+    "lstm",
+    "transformer_encoder_direct",
+    "transformer_encdec_direct",
+)
+MODEL_TYPE_ALIASES = {
+    "transformer": "transformer_encoder_direct",
+}
 ALL_FEATURE_NAMES = (
     "aggregate",
     "active_appliance_count",
@@ -47,6 +57,7 @@ class LSTMModelConfig:
     num_layers: int
     dropout: float
     target_length: int
+    input_length: int
 
 
 @dataclass(slots=True)
@@ -60,6 +71,7 @@ class TransformerModelConfig:
     target_length: int
     patch_length: int
     patch_stride: int
+    input_length: int
 
 
 @dataclass(slots=True)
@@ -81,7 +93,8 @@ class ForecastExperimentConfig:
     default_model_type: str
     data: ForecastDataConfig
     lstm: LSTMRuntimeConfig
-    transformer: TransformerRuntimeConfig
+    transformer_encoder_direct: TransformerRuntimeConfig
+    transformer_encdec_direct: TransformerRuntimeConfig
 
 
 @dataclass(slots=True)
@@ -107,6 +120,11 @@ def detect_device() -> str:
     return "cpu"
 
 
+def _normalize_model_type(model_type: str) -> str:
+    normalized_model_type = model_type.strip().lower()
+    return MODEL_TYPE_ALIASES.get(normalized_model_type, normalized_model_type)
+
+
 def _resolve_path(path_value: str | None, base_dir: Path) -> Path | None:
     if path_value is None:
         return None
@@ -129,6 +147,70 @@ def _load_predict_config(
     )
 
 
+def _build_lstm_runtime(
+    raw_section: dict[str, Any],
+    base_dir: Path,
+    feature_count: int,
+) -> LSTMRuntimeConfig:
+    model_raw = raw_section.get("model", {})
+    predict_raw = raw_section.get("predict", {})
+    train_output_dir = _resolve_path(
+        str(
+            raw_section.get(
+                "train_output_dir",
+                "../models_agent/checkpoints/forecast/lstm",
+            )
+        ),
+        base_dir,
+    )
+    return LSTMRuntimeConfig(
+        model=LSTMModelConfig(
+            input_size=int(model_raw.get("input_size", feature_count)),
+            hidden_size=int(model_raw.get("hidden_size", 256)),
+            num_layers=int(model_raw.get("num_layers", 3)),
+            dropout=float(model_raw.get("dropout", 0.2)),
+            target_length=int(model_raw.get("target_length", TARGET_LENGTH)),
+            input_length=int(
+                model_raw.get("input_length", DEFAULT_LSTM_INPUT_LENGTH)
+            ),
+        ),
+        predict=_load_predict_config(predict_raw, base_dir),
+        train_output_dir=train_output_dir,
+    )
+
+
+def _build_transformer_runtime(
+    raw_section: dict[str, Any],
+    base_dir: Path,
+    feature_count: int,
+    default_output_dir: str,
+) -> TransformerRuntimeConfig:
+    model_raw = raw_section.get("model", {})
+    predict_raw = raw_section.get("predict", {})
+    train_output_dir = _resolve_path(
+        str(raw_section.get("train_output_dir", default_output_dir)),
+        base_dir,
+    )
+    return TransformerRuntimeConfig(
+        model=TransformerModelConfig(
+            input_size=int(model_raw.get("input_size", feature_count)),
+            d_model=int(model_raw.get("d_model", 256)),
+            num_layers=int(model_raw.get("num_layers", 3)),
+            num_heads=int(model_raw.get("num_heads", 8)),
+            ffn_dim=int(model_raw.get("ffn_dim", 512)),
+            dropout=float(model_raw.get("dropout", 0.2)),
+            target_length=int(model_raw.get("target_length", TARGET_LENGTH)),
+            patch_length=int(model_raw.get("patch_length", 16)),
+            patch_stride=int(model_raw.get("patch_stride", 8)),
+            input_length=int(
+                model_raw.get("input_length", DEFAULT_TRANSFORMER_INPUT_LENGTH)
+            ),
+        ),
+        predict=_load_predict_config(predict_raw, base_dir),
+        train_output_dir=train_output_dir,
+    )
+
+
 def load_config(config_path: Path) -> ForecastExperimentConfig:
     import yaml
 
@@ -136,80 +218,55 @@ def load_config(config_path: Path) -> ForecastExperimentConfig:
     raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     base_dir = config_path.parent.parent
 
-    default_model_type = str(raw_config.get("default_model_type", "lstm"))
+    default_model_type = _normalize_model_type(
+        str(raw_config.get("default_model_type", "lstm"))
+    )
     data_raw = raw_config.get("data", {})
     data_config = ForecastDataConfig(
         feature_names=[
             str(item)
             for item in data_raw.get(
                 "feature_names",
-                ["aggregate", "slot_sin", "slot_cos", "weekday_sin", "weekday_cos"],
+                [
+                    "aggregate",
+                    "slot_sin",
+                    "slot_cos",
+                    "weekday_sin",
+                    "weekday_cos",
+                    "active_appliance_count",
+                    "burst_event_count",
+                ],
             )
         ],
         aggregate_normalization=str(
-            data_raw.get("aggregate_normalization", "input_window")
+            data_raw.get("aggregate_normalization", DEFAULT_NORMALIZATION_MODE)
         ),
         aggregate_norm_eps=float(data_raw.get("aggregate_norm_eps", 1e-6)),
     )
 
-    lstm_raw = raw_config.get("lstm", {})
-    lstm_model_raw = lstm_raw.get("model", {})
-    lstm_predict_raw = lstm_raw.get("predict", {})
-    lstm_train_output_dir = _resolve_path(
-        str(
-            lstm_raw.get(
-                "train_output_dir",
-                "../models_agent/checkpoints/forecast/lstm",
-            )
-        ),
+    lstm_runtime = _build_lstm_runtime(
+        raw_config.get("lstm", {}),
         base_dir,
+        len(data_config.feature_names),
     )
-    lstm_runtime = LSTMRuntimeConfig(
-        model=LSTMModelConfig(
-            input_size=int(lstm_model_raw.get("input_size", len(data_config.feature_names))),
-            hidden_size=int(lstm_model_raw.get("hidden_size", 256)),
-            num_layers=int(lstm_model_raw.get("num_layers", 3)),
-            dropout=float(lstm_model_raw.get("dropout", 0.2)),
-            target_length=int(lstm_model_raw.get("target_length", TARGET_LENGTH)),
-        ),
-        predict=_load_predict_config(lstm_predict_raw, base_dir),
-        train_output_dir=lstm_train_output_dir,
+    transformer_encoder_direct_runtime = _build_transformer_runtime(
+        raw_config.get("transformer_encoder_direct", {}),
+        base_dir,
+        len(data_config.feature_names),
+        "../models_agent/checkpoints/forecast/transformer_encoder_direct",
+    )
+    transformer_encdec_direct_runtime = _build_transformer_runtime(
+        raw_config.get("transformer_encdec_direct", {}),
+        base_dir,
+        len(data_config.feature_names),
+        "../models_agent/checkpoints/forecast/transformer_encdec_direct",
     )
 
-    transformer_raw = raw_config.get("transformer", {})
-    transformer_model_raw = transformer_raw.get("model", {})
-    transformer_predict_raw = transformer_raw.get("predict", {})
-    transformer_train_output_dir = _resolve_path(
-        str(
-            transformer_raw.get(
-                "train_output_dir",
-                "../models_agent/checkpoints/forecast/transformer",
-            )
-        ),
-        base_dir,
-    )
-    transformer_runtime = TransformerRuntimeConfig(
-        model=TransformerModelConfig(
-            input_size=int(
-                transformer_model_raw.get("input_size", len(data_config.feature_names))
-            ),
-            d_model=int(transformer_model_raw.get("d_model", 128)),
-            num_layers=int(transformer_model_raw.get("num_layers", 2)),
-            num_heads=int(transformer_model_raw.get("num_heads", 4)),
-            ffn_dim=int(transformer_model_raw.get("ffn_dim", 512)),
-            dropout=float(transformer_model_raw.get("dropout", 0.2)),
-            target_length=int(
-                transformer_model_raw.get("target_length", TARGET_LENGTH)
-            ),
-            patch_length=int(transformer_model_raw.get("patch_length", 16)),
-            patch_stride=int(transformer_model_raw.get("patch_stride", 8)),
-        ),
-        predict=_load_predict_config(transformer_predict_raw, base_dir),
-        train_output_dir=transformer_train_output_dir,
-    )
-
-    if default_model_type not in {"lstm", "transformer"}:
-        raise ValueError("default_model_type 只支持 lstm 或 transformer")
+    if default_model_type not in SUPPORTED_FORECAST_MODEL_TYPES:
+        raise ValueError(
+            "default_model_type 只支持 lstm / transformer_encoder_direct / "
+            "transformer_encdec_direct"
+        )
     if not data_config.feature_names:
         raise ValueError("feature_names 不能为空")
     if data_config.feature_names[0] != "aggregate":
@@ -219,24 +276,37 @@ def load_config(config_path: Path) -> ForecastExperimentConfig:
     invalid_feature_names = set(data_config.feature_names).difference(ALL_FEATURE_NAMES)
     if invalid_feature_names:
         raise ValueError(f"存在不支持的 feature_names: {sorted(invalid_feature_names)}")
-    if data_config.aggregate_normalization not in {"input_window", "global"}:
+    if data_config.aggregate_normalization not in {
+        DEFAULT_NORMALIZATION_MODE,
+        LEGACY_NORMALIZATION_MODE,
+    }:
         raise ValueError("aggregate_normalization 只支持 input_window 或 global")
     if lstm_runtime.model.input_size != len(data_config.feature_names):
         raise ValueError("lstm.model.input_size 必须等于 feature_names 长度")
-    if transformer_runtime.model.input_size != len(data_config.feature_names):
-        raise ValueError("transformer.model.input_size 必须等于 feature_names 长度")
-    if transformer_runtime.model.d_model % transformer_runtime.model.num_heads != 0:
-        raise ValueError("transformer.d_model 必须能被 num_heads 整除")
-    if transformer_runtime.model.target_length != TARGET_LENGTH:
-        raise ValueError(f"transformer.target_length 必须等于 {TARGET_LENGTH}")
     if lstm_runtime.model.target_length != TARGET_LENGTH:
         raise ValueError(f"lstm.target_length 必须等于 {TARGET_LENGTH}")
+    if lstm_runtime.model.input_length <= 0:
+        raise ValueError("lstm.input_length 必须大于 0")
+
+    for model_name, runtime in (
+        ("transformer_encoder_direct", transformer_encoder_direct_runtime),
+        ("transformer_encdec_direct", transformer_encdec_direct_runtime),
+    ):
+        if runtime.model.input_size != len(data_config.feature_names):
+            raise ValueError(f"{model_name}.input_size 必须等于 feature_names 长度")
+        if runtime.model.d_model % runtime.model.num_heads != 0:
+            raise ValueError(f"{model_name}.d_model 必须能被 num_heads 整除")
+        if runtime.model.target_length != TARGET_LENGTH:
+            raise ValueError(f"{model_name}.target_length 必须等于 {TARGET_LENGTH}")
+        if runtime.model.input_length <= 0:
+            raise ValueError(f"{model_name}.input_length 必须大于 0")
 
     return ForecastExperimentConfig(
         default_model_type=default_model_type,
         data=data_config,
         lstm=lstm_runtime,
-        transformer=transformer_runtime,
+        transformer_encoder_direct=transformer_encoder_direct_runtime,
+        transformer_encdec_direct=transformer_encdec_direct_runtime,
     )
 
 
@@ -250,10 +320,12 @@ class Seq2SeqLSTMForecaster(nn.Module):
         num_layers: int = 2,
         dropout: float = 0.2,
         target_length: int = TARGET_LENGTH,
+        input_length: int = DEFAULT_LSTM_INPUT_LENGTH,
     ) -> None:
         super().__init__()
         self.input_size = input_size
         self.target_length = target_length
+        self.input_length = input_length
         lstm_dropout = dropout if num_layers > 1 else 0.0
 
         self.encoder = nn.LSTM(
@@ -282,6 +354,10 @@ class Seq2SeqLSTMForecaster(nn.Module):
             raise ValueError(
                 f"输入维度应为 [batch, seq_len, channels]，实际为 {tuple(features.shape)}"
             )
+        if features.size(1) != self.input_length:
+            raise ValueError(
+                f"输入序列长度应为 {self.input_length}，实际为 {features.size(1)}"
+            )
         if features.size(-1) != self.input_size:
             raise ValueError(
                 f"输入通道数应为 {self.input_size}，实际为 {features.size(-1)}"
@@ -308,23 +384,24 @@ class Seq2SeqLSTMForecaster(nn.Module):
 
 
 class PatchDirectTransformerForecaster(nn.Module):
-    """面向 288->96 任务的 patch-based Transformer。"""
+    """面向 7 天输入的 patch-based direct Transformer。"""
 
     def __init__(
         self,
         input_size: int = 1,
-        d_model: int = 128,
-        num_layers: int = 2,
-        num_heads: int = 4,
+        d_model: int = 256,
+        num_layers: int = 3,
+        num_heads: int = 8,
         ffn_dim: int = 512,
         dropout: float = 0.2,
         target_length: int = TARGET_LENGTH,
         patch_length: int = 16,
         patch_stride: int = 8,
+        input_length: int = DEFAULT_TRANSFORMER_INPUT_LENGTH,
     ) -> None:
         super().__init__()
         self.input_size = input_size
-        self.history_length = INPUT_LENGTH
+        self.history_length = input_length
         self.target_length = target_length
         self.patch_length = patch_length
         self.patch_stride = patch_stride
@@ -400,6 +477,140 @@ class PatchDirectTransformerForecaster(nn.Module):
         return self.output_layer(flattened)
 
 
+class PatchEncDecDirectTransformerForecaster(nn.Module):
+    """面向 7 天输入的 patch encoder-decoder direct Transformer。"""
+
+    def __init__(
+        self,
+        input_size: int = 1,
+        d_model: int = 256,
+        num_layers: int = 3,
+        num_heads: int = 8,
+        ffn_dim: int = 512,
+        dropout: float = 0.2,
+        target_length: int = TARGET_LENGTH,
+        patch_length: int = 16,
+        patch_stride: int = 8,
+        input_length: int = DEFAULT_TRANSFORMER_INPUT_LENGTH,
+    ) -> None:
+        super().__init__()
+        self.input_size = input_size
+        self.history_length = input_length
+        self.target_length = target_length
+        self.patch_length = patch_length
+        self.patch_stride = patch_stride
+        self.num_patches = self._compute_num_patches()
+
+        self.patch_projection = nn.Linear(input_size * patch_length, d_model)
+        self.encoder_position_embedding = nn.Parameter(
+            torch.zeros(1, self.num_patches, d_model)
+        )
+        self.decoder_query_embedding = nn.Parameter(
+            torch.zeros(1, target_length, d_model)
+        )
+        self.decoder_position_embedding = nn.Parameter(
+            torch.zeros(1, target_length, d_model)
+        )
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=num_heads,
+            dim_feedforward=ffn_dim,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=False,
+        )
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer=encoder_layer,
+            num_layers=num_layers,
+            norm=nn.LayerNorm(d_model),
+        )
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=num_heads,
+            dim_feedforward=ffn_dim,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=False,
+        )
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer=decoder_layer,
+            num_layers=num_layers,
+            norm=nn.LayerNorm(d_model),
+        )
+        self.output_layer = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
+        )
+        nn.init.normal_(self.encoder_position_embedding, mean=0.0, std=0.02)
+        nn.init.normal_(self.decoder_query_embedding, mean=0.0, std=0.02)
+        nn.init.normal_(self.decoder_position_embedding, mean=0.0, std=0.02)
+
+    def _compute_num_patches(self) -> int:
+        if self.patch_length <= 0 or self.patch_stride <= 0:
+            raise ValueError("patch_length 和 patch_stride 必须大于 0")
+        if self.patch_length > self.history_length:
+            raise ValueError("patch_length 不能大于输入历史长度")
+        return 1 + (self.history_length - self.patch_length) // self.patch_stride
+
+    def _patchify(self, features: torch.Tensor) -> torch.Tensor:
+        patches = features.transpose(1, 2).unfold(
+            dimension=2,
+            size=self.patch_length,
+            step=self.patch_stride,
+        )
+        patches = patches.permute(0, 2, 1, 3).contiguous()
+        batch_size, patch_count, channel_count, patch_length = patches.shape
+        if patch_count != self.num_patches:
+            raise RuntimeError(
+                f"patch 数量异常，期望 {self.num_patches}，实际 {patch_count}"
+            )
+        return patches.view(batch_size, patch_count, channel_count * patch_length)
+
+    def _build_decoder_queries(
+        self,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        queries = self.decoder_query_embedding + self.decoder_position_embedding
+        return queries.to(device=device, dtype=dtype).expand(batch_size, -1, -1)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        if features.ndim != 3:
+            raise ValueError(
+                f"输入维度应为 [batch, seq_len, channels]，实际为 {tuple(features.shape)}"
+            )
+        if features.size(1) != self.history_length:
+            raise ValueError(
+                f"输入序列长度应为 {self.history_length}，实际为 {features.size(1)}"
+            )
+        if features.size(-1) != self.input_size:
+            raise ValueError(
+                f"输入通道数应为 {self.input_size}，实际为 {features.size(-1)}"
+            )
+
+        patch_tokens = self.patch_projection(self._patchify(features))
+        memory = self.encoder(
+            patch_tokens
+            + self.encoder_position_embedding[:, : patch_tokens.size(1), :]
+        )
+        decoded = self.decoder(
+            tgt=self._build_decoder_queries(
+                batch_size=memory.size(0),
+                device=memory.device,
+                dtype=memory.dtype,
+            ),
+            memory=memory,
+        )
+        return self.output_layer(decoded).squeeze(-1)
+
+
 def build_lstm_model(model_config: LSTMModelConfig) -> Seq2SeqLSTMForecaster:
     return Seq2SeqLSTMForecaster(
         input_size=model_config.input_size,
@@ -407,10 +618,11 @@ def build_lstm_model(model_config: LSTMModelConfig) -> Seq2SeqLSTMForecaster:
         num_layers=model_config.num_layers,
         dropout=model_config.dropout,
         target_length=model_config.target_length,
+        input_length=model_config.input_length,
     )
 
 
-def build_transformer_model(
+def build_transformer_encoder_direct_model(
     model_config: TransformerModelConfig,
 ) -> PatchDirectTransformerForecaster:
     return PatchDirectTransformerForecaster(
@@ -423,6 +635,24 @@ def build_transformer_model(
         target_length=model_config.target_length,
         patch_length=model_config.patch_length,
         patch_stride=model_config.patch_stride,
+        input_length=model_config.input_length,
+    )
+
+
+def build_transformer_encdec_direct_model(
+    model_config: TransformerModelConfig,
+) -> PatchEncDecDirectTransformerForecaster:
+    return PatchEncDecDirectTransformerForecaster(
+        input_size=model_config.input_size,
+        d_model=model_config.d_model,
+        num_layers=model_config.num_layers,
+        num_heads=model_config.num_heads,
+        ffn_dim=model_config.ffn_dim,
+        dropout=model_config.dropout,
+        target_length=model_config.target_length,
+        patch_length=model_config.patch_length,
+        patch_stride=model_config.patch_stride,
+        input_length=model_config.input_length,
     )
 
 
@@ -477,7 +707,32 @@ def _resolve_lstm_model_config(
         target_length=int(
             model_raw.get("target_length", fallback_model_config.target_length)
         ),
+        input_length=int(
+            model_raw.get("input_length", fallback_model_config.input_length)
+        ),
     )
+
+
+def _infer_transformer_input_length(
+    checkpoint: dict[str, Any],
+    patch_length: int,
+    patch_stride: int,
+    fallback_input_length: int,
+) -> int:
+    if patch_length <= 0 or patch_stride <= 0:
+        return fallback_input_length
+
+    model_state = checkpoint.get("model_state_dict")
+    if not isinstance(model_state, dict):
+        return fallback_input_length
+
+    for position_key in ("position_embedding", "encoder_position_embedding"):
+        position_embedding = model_state.get(position_key)
+        if isinstance(position_embedding, torch.Tensor) and position_embedding.ndim == 3:
+            num_patches = int(position_embedding.size(1))
+            return patch_length + patch_stride * max(0, num_patches - 1)
+
+    return fallback_input_length
 
 
 def _resolve_transformer_model_config(
@@ -492,6 +747,20 @@ def _resolve_transformer_model_config(
     if not isinstance(model_raw, dict):
         return fallback_model_config
 
+    patch_length = int(model_raw.get("patch_length", fallback_model_config.patch_length))
+    patch_stride = int(model_raw.get("patch_stride", fallback_model_config.patch_stride))
+    input_length = int(
+        model_raw.get(
+            "input_length",
+            _infer_transformer_input_length(
+                checkpoint,
+                patch_length,
+                patch_stride,
+                fallback_model_config.input_length,
+            ),
+        )
+    )
+
     return TransformerModelConfig(
         input_size=int(model_raw.get("input_size", fallback_model_config.input_size)),
         d_model=int(model_raw.get("d_model", fallback_model_config.d_model)),
@@ -502,12 +771,9 @@ def _resolve_transformer_model_config(
         target_length=int(
             model_raw.get("target_length", fallback_model_config.target_length)
         ),
-        patch_length=int(
-            model_raw.get("patch_length", fallback_model_config.patch_length)
-        ),
-        patch_stride=int(
-            model_raw.get("patch_stride", fallback_model_config.patch_stride)
-        ),
+        patch_length=patch_length,
+        patch_stride=patch_stride,
+        input_length=input_length,
     )
 
 
@@ -613,15 +879,18 @@ def _normalize_features(
     raise ValueError(f"不支持的 aggregate_mode: {normalization.aggregate_mode}")
 
 
-def _build_temporal_feature_sequences(start_value: str) -> dict[str, list[float]]:
+def _build_temporal_feature_sequences(
+    start_value: str,
+    input_length: int,
+) -> dict[str, list[float]]:
     base_time = pd.to_datetime(start_value)
     if pd.isna(base_time):
         raise ValueError("无法根据 timestamp 自动生成时间特征，请提供合法时间")
 
-    timestamps = pd.date_range(start=base_time, periods=INPUT_LENGTH, freq="15min")
+    timestamps = pd.date_range(start=base_time, periods=input_length, freq="15min")
     slot_index = timestamps.hour * 4 + timestamps.minute // 15
     weekday_index = timestamps.dayofweek
-    slot_angle = 2.0 * np.pi * slot_index.to_numpy(dtype=np.float32) / 96.0
+    slot_angle = 2.0 * np.pi * slot_index.to_numpy(dtype=np.float32) / STEPS_PER_DAY
     weekday_angle = 2.0 * np.pi * weekday_index.to_numpy(dtype=np.float32) / 7.0
     return {
         "slot_sin": np.sin(slot_angle).astype(np.float32).tolist(),
@@ -634,6 +903,7 @@ def _build_temporal_feature_sequences(start_value: str) -> dict[str, list[float]
 def _build_feature_values(
     sample: dict[str, Any],
     feature_names: list[str],
+    input_length: int,
 ) -> dict[str, list[float]]:
     temporal_feature_names = {
         "slot_sin",
@@ -657,8 +927,8 @@ def _build_feature_values(
             feature_values[feature_name] = raw_value if raw_value is not None else None
 
     aggregate = feature_values.get("aggregate")
-    if aggregate is None or len(aggregate) != INPUT_LENGTH:
-        raise ValueError("aggregate 输入序列长度必须为 288")
+    if aggregate is None or len(aggregate) != input_length:
+        raise ValueError(f"aggregate 输入序列长度必须为 {input_length}")
 
     missing_temporal_features = [
         feature_name
@@ -669,14 +939,14 @@ def _build_feature_values(
         input_start = str(sample.get("input_start", "")).strip()
         if not input_start and isinstance(series, list) and series:
             input_start = str(series[0].get("timestamp", "")).strip()
-        temporal_sequences = _build_temporal_feature_sequences(input_start)
+        temporal_sequences = _build_temporal_feature_sequences(input_start, input_length)
         for feature_name in missing_temporal_features:
             feature_values[feature_name] = temporal_sequences[feature_name]
 
     for feature_name in feature_names:
         values = feature_values.get(feature_name)
-        if values is None or len(values) != INPUT_LENGTH:
-            raise ValueError(f"{feature_name} 输入序列长度必须为 288")
+        if values is None or len(values) != input_length:
+            raise ValueError(f"{feature_name} 输入序列长度必须为 {input_length}")
 
     return {
         feature_name: [float(value) for value in feature_values[feature_name] or []]
@@ -688,12 +958,41 @@ def _select_runtime_config(
     experiment_config: ForecastExperimentConfig,
     model_type: str,
 ) -> tuple[str, LSTMRuntimeConfig | TransformerRuntimeConfig]:
-    normalized_model_type = model_type.strip().lower()
+    normalized_model_type = _normalize_model_type(model_type)
     if normalized_model_type == "lstm":
         return normalized_model_type, experiment_config.lstm
-    if normalized_model_type == "transformer":
-        return normalized_model_type, experiment_config.transformer
-    raise ValueError("预测模型只支持 lstm 或 transformer")
+    if normalized_model_type == "transformer_encoder_direct":
+        return normalized_model_type, experiment_config.transformer_encoder_direct
+    if normalized_model_type == "transformer_encdec_direct":
+        return normalized_model_type, experiment_config.transformer_encdec_direct
+    raise ValueError(
+        "预测模型只支持 lstm / transformer_encoder_direct / "
+        "transformer_encdec_direct"
+    )
+
+
+def get_required_input_length(
+    config_path: Path,
+    model_type: str | None = None,
+) -> int:
+    experiment_config = load_config(config_path)
+    selected_model_type, runtime_config = _select_runtime_config(
+        experiment_config,
+        model_type or experiment_config.default_model_type,
+    )
+    checkpoint_path = runtime_config.predict.checkpoint_path or (
+        runtime_config.train_output_dir / "best_model.pt"
+    )
+    if checkpoint_path.exists():
+        checkpoint = load_checkpoint(checkpoint_path, torch.device("cpu"))
+        if selected_model_type == "lstm":
+            return _resolve_lstm_model_config(runtime_config.model, checkpoint).input_length
+        return _resolve_transformer_model_config(
+            runtime_config.model,
+            checkpoint,
+        ).input_length
+
+    return runtime_config.model.input_length
 
 
 def predict_single_sample(
@@ -717,7 +1016,19 @@ def predict_single_sample(
         checkpoint,
     )
 
-    feature_values = _build_feature_values(sample, feature_names)
+    if selected_model_type == "lstm":
+        model_config = _resolve_lstm_model_config(runtime_config.model, checkpoint)
+    else:
+        model_config = _resolve_transformer_model_config(
+            runtime_config.model,
+            checkpoint,
+        )
+
+    feature_values = _build_feature_values(
+        sample,
+        feature_names,
+        model_config.input_length,
+    )
     features = np.stack(
         [
             np.asarray(feature_values[feature_name], dtype=np.float32)
@@ -733,20 +1044,24 @@ def predict_single_sample(
     )
 
     if selected_model_type == "lstm":
-        model_config = _resolve_lstm_model_config(runtime_config.model, checkpoint)
         if model_config.input_size != len(feature_names):
             raise ValueError("LSTM checkpoint 的 input_size 与 feature_names 长度不一致")
         model = build_lstm_model(model_config).to(device)
-    else:
-        model_config = _resolve_transformer_model_config(
-            runtime_config.model,
-            checkpoint,
-        )
+    elif selected_model_type == "transformer_encoder_direct":
         if model_config.input_size != len(feature_names):
             raise ValueError(
-                "Transformer checkpoint 的 input_size 与 feature_names 长度不一致"
+                "Transformer Encoder Direct checkpoint 的 input_size 与 "
+                "feature_names 长度不一致"
             )
-        model = build_transformer_model(model_config).to(device)
+        model = build_transformer_encoder_direct_model(model_config).to(device)
+    else:
+        if model_config.input_size != len(feature_names):
+            raise ValueError(
+                "Transformer EncDec Direct checkpoint 的 input_size 与 "
+                "feature_names 长度不一致"
+            )
+        model = build_transformer_encdec_direct_model(model_config).to(device)
+
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 

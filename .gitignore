@@ -82,3 +82,4 @@ models/data/raw/
 *.rar
 .qoder/
 .cache/
+models_test/

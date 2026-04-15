@@ -7,7 +7,11 @@ from typing import Any
 from app.config import Settings
 from app.contracts import ForecastRequest
 from app.errors import ServiceUnavailableError, ValidationError
-from app.inference.forecast import INPUT_LENGTH, predict_single_sample
+from app.inference.forecast import (
+    SUPPORTED_FORECAST_MODEL_TYPES,
+    get_required_input_length,
+    predict_single_sample,
+)
 
 
 class ForecastService:
@@ -17,13 +21,25 @@ class ForecastService:
         self.settings = settings
 
     def forecast(self, request: ForecastRequest) -> dict[str, Any]:
-        if request.model_type not in {"lstm", "transformer"}:
-            raise ValidationError("当前预测接口仅支持 lstm 或 transformer")
+        if request.model_type not in set(SUPPORTED_FORECAST_MODEL_TYPES).union(
+            {"transformer"}
+        ):
+            raise ValidationError(
+                "当前预测接口仅支持 lstm / transformer_encoder_direct / "
+                "transformer_encdec_direct"
+            )
 
-        if len(request.series) < INPUT_LENGTH:
-            raise ValidationError("预测输入历史序列长度不足，至少需要 288 个点")
+        required_input_length = get_required_input_length(
+            self.settings.forecast_config_path,
+            request.model_type,
+        )
 
-        recent_series = request.series[-INPUT_LENGTH:]
+        if len(request.series) < required_input_length:
+            raise ValidationError(
+                f"预测输入历史序列长度不足，至少需要 {required_input_length} 个点"
+            )
+
+        recent_series = request.series[-required_input_length:]
         try:
             predictions = predict_single_sample(
                 sample={

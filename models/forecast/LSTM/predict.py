@@ -120,13 +120,13 @@ def _build_feature_array(
 ) -> np.ndarray:
     aggregate = feature_values.get("aggregate")
     if aggregate is None or len(aggregate) != INPUT_LENGTH:
-        raise ValueError("aggregate 输入序列长度必须为 288")
+        raise ValueError(f"aggregate 输入序列长度必须为 {INPUT_LENGTH}")
 
     feature_arrays: list[np.ndarray] = []
     for feature_name in feature_names:
         values = feature_values.get(feature_name)
         if values is None or len(values) != INPUT_LENGTH:
-            raise ValueError(f"{feature_name} 输入序列长度必须为 288")
+            raise ValueError(f"{feature_name} 输入序列长度必须为 {INPUT_LENGTH}")
         feature_arrays.append(np.asarray(values, dtype=np.float32))
 
     features = np.stack(feature_arrays, axis=-1)

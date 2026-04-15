@@ -9,7 +9,7 @@ from pathlib import Path
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from data.process.classification.builder import build_classification_dataset
+from data.process.classification.builder import build_classification_features
 from data.process.common.base import build_base_dataset
 from data.process.forecast.builder import build_forecast_dataset
 from data.process.testing import export_live_sample, export_representative_test_samples
@@ -34,7 +34,14 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py preprocess-base\n"
             "  python main.py build-classification\n"
             "  python main.py build-forecast\n"
-            "  python main.py run-all\n"
+            "  python main.py cluster-kmeans\n"
+            "  python main.py relabel-kmeans\n"
+            "\n"
+            "分类标签正式流程:\n"
+            "  1. python main.py build-classification\n"
+            "  2. python main.py cluster-kmeans\n"
+            "  3. 人工修改 cluster_label_mapping.yaml\n"
+            "  4. python main.py relabel-kmeans\n"
             "\n"
             "查看某个命令的详细帮助:\n"
             "  python main.py preprocess-base -h"
@@ -76,9 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     classification_parser = subparsers.add_parser(
         "build-classification",
-        help="生成分类任务数据",
+        help="生成分类任务日级特征",
         description=(
-            "从基础 15 分钟时序生成日级分类特征和规则标签。"
+            "从基础 15 分钟时序生成日级分类特征文件。"
+            "此阶段不再生成规则标签，正式标签统一由 KMeans 聚类与人工映射产生。"
             "分类特征固定为 96x5：aggregate、slot_sin、slot_cos、weekday_sin、weekday_cos。"
         ),
     )
@@ -98,7 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     forecast_parser = subparsers.add_parser(
         "build-forecast",
         help="生成预测任务数据",
-        description="从基础 15 分钟时序生成 3 天输入到 1 天输出的预测样本。",
+        description="从基础 15 分钟时序生成 7 天输入到 1 天输出的预测样本。",
     )
     forecast_parser.add_argument(
         "--base-dir",
@@ -111,6 +119,36 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("data/processed/forecast"),
         help="预测数据输出目录，默认: %(default)s",
+    )
+
+    kmeans_fit_parser = subparsers.add_parser(
+        "cluster-kmeans",
+        help="对分类日曲线执行 KMeans 聚类分析",
+        description=(
+            "读取分类日曲线文件，执行 KMeans 聚类，并导出每簇平均曲线、"
+            "样本分配、代表样本与人工打标映射模板。"
+        ),
+    )
+    kmeans_fit_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("data/process/classification/configs/config.yaml"),
+        help="KMeans 聚类配置文件路径，默认: %(default)s",
+    )
+
+    kmeans_relabel_parser = subparsers.add_parser(
+        "relabel-kmeans",
+        help="根据 KMeans 人工映射结果重新生成标签文件",
+        description=(
+            "读取 KMeans 聚类分配结果和簇到标签映射文件，"
+            "生成新的标签文件、完整带标签特征文件，以及正式分类训练文件。"
+        ),
+    )
+    kmeans_relabel_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("data/process/classification/configs/config.yaml"),
+        help="KMeans 聚类配置文件路径，默认: %(default)s",
     )
 
     export_parser = subparsers.add_parser(
@@ -175,7 +213,7 @@ def build_parser() -> argparse.ArgumentParser:
     live_parser.add_argument(
         "--forecast-config",
         type=Path,
-        default=Path("forecast/transformer_direct/configs/config.yaml"),
+        default=Path("forecast/transformer_encoder_direct/configs/config.yaml"),
         help="预测模型配置文件路径，默认: %(default)s",
     )
     live_parser.add_argument(
@@ -209,46 +247,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="live 样本保留的连续天数窗口，支持超过两周，默认: %(default)s",
     )
 
-    all_parser = subparsers.add_parser(
-        "run-all",
-        help="执行完整预处理流水线",
-        description="依次执行基础预处理、分类样本构造和预测样本构造。",
-    )
-    all_parser.add_argument(
-        "--input-dir",
-        type=Path,
-        default=Path("data/raw"),
-        help="原始数据根目录或某个数据源目录，默认: %(default)s",
-    )
-    all_parser.add_argument(
-        "--base-dir",
-        type=Path,
-        default=Path("data/processed/base_15min"),
-        help="基础时序输出目录，默认: %(default)s",
-    )
-    all_parser.add_argument(
-        "--classification-dir",
-        type=Path,
-        default=Path("data/processed/classification"),
-        help="分类数据输出目录，默认: %(default)s",
-    )
-    all_parser.add_argument(
-        "--forecast-dir",
-        type=Path,
-        default=Path("data/processed/forecast"),
-        help="预测数据输出目录，默认: %(default)s",
-    )
-    all_parser.add_argument(
-        "--sources",
-        type=str,
-        default="refit,ukdale,slovakia,opensynth",
-        help="要处理的数据源，逗号分隔；可选: refit,ukdale,slovakia,opensynth",
-    )
-    all_parser.add_argument(
-        "--skip-existing",
-        action="store_true",
-        help="若基础时序文件已存在则跳过，可用于断点续跑",
-    )
     return parser
 
 
@@ -270,13 +268,12 @@ def main() -> None:
         return
 
     if args.command == "build-classification":
-        features_df, labels_df = build_classification_dataset(
+        features_df = build_classification_features(
             base_dir=args.base_dir, output_dir=args.output_dir
         )
         print(
-            "已生成分类数据，"
+            "已生成分类日级特征，"
             f"样本数: {len(features_df)}，"
-            f"标签数: {len(labels_df)}，"
             "特征维度: 96x5"
         )
         return
@@ -286,6 +283,29 @@ def main() -> None:
             base_dir=args.base_dir, output_dir=args.output_dir
         )
         print(f"已生成预测数据，样本数: {len(forecast_df)}")
+        return
+
+    if args.command == "cluster-kmeans":
+        from data.process.classification.fit import run_fit as run_kmeans_fit
+
+        result = run_kmeans_fit(config_path=args.config)
+        print(
+            "已完成 KMeans 聚类分析，"
+            f"平均曲线文件: {result['profiles_path']}，"
+            f"映射模板: {result['mapping_template']}"
+        )
+        return
+
+    if args.command == "relabel-kmeans":
+        from data.process.classification.relabel import run_relabel as run_kmeans_relabel
+
+        result = run_kmeans_relabel(config_path=args.config)
+        print(
+            "已完成 KMeans 人工映射打标，"
+            f"特征文件: {result['labeled_features_path']}，"
+            f"标签文件: {result['labeled_labels_path']}，"
+            f"正式训练文件: {result['canonical_labeled_path']}"
+        )
         return
 
     if args.command == "export-testing-samples":
@@ -325,28 +345,6 @@ def main() -> None:
             f"窗口天数: {result['window_days']}，"
             f"行数: {result['row_count']}，"
             f"输出文件: {result['output_path']}"
-        )
-        return
-
-    if args.command == "run-all":
-        summary_df = build_base_dataset(
-            input_dir=args.input_dir,
-            output_dir=args.base_dir,
-            allowed_sources=_parse_csv_set(args.sources),
-            skip_existing=args.skip_existing,
-        )
-        features_df, _ = build_classification_dataset(
-            base_dir=args.base_dir, output_dir=args.classification_dir
-        )
-        forecast_df = build_forecast_dataset(
-            base_dir=args.base_dir, output_dir=args.forecast_dir
-        )
-        print(
-            "完整流水线执行完成，"
-            f"家庭数量: {len(summary_df)}，"
-            f"分类样本数: {len(features_df)}，"
-            f"预测样本数: {len(forecast_df)}，"
-            "分类特征维度: 96x5"
         )
         return
 

@@ -1,0 +1,118 @@
+{
+  "checkpoint_path": "/Users/syn/my/projects/gp/models/classification/xgboost/output/best_model.json",
+  "metrics": {
+    "loss": 0.06078574061393738,
+    "accuracy": 0.9766972924628019,
+    "macro_f1": 0.9755538934344367,
+    "elapsed_seconds": 0.268557071685791
+  },
+  "labels": [
+    "daytime_active",
+    "daytime_peak_strong",
+    "flat_stable",
+    "night_dominant"
+  ],
+  "confusion_matrix": [
+    [
+      12926,
+      250,
+      191,
+      0
+    ],
+    [
+      222,
+      18322,
+      154,
+      0
+    ],
+    [
+      222,
+      105,
+      12799,
+      119
+    ],
+    [
+      0,
+      0,
+      170,
+      16015
+    ]
+  ],
+  "per_class_metrics": [
+    {
+      "label_name": "daytime_active",
+      "precision": 0.9667913238593867,
+      "recall": 0.9670083040323184,
+      "f1": 0.9668998017728242,
+      "support": 13367
+    },
+    {
+      "label_name": "daytime_peak_strong",
+      "precision": 0.9809926647748568,
+      "recall": 0.9798908974221842,
+      "f1": 0.9804414715719064,
+      "support": 18698
+    },
+    {
+      "label_name": "flat_stable",
+      "precision": 0.9613189124230134,
+      "recall": 0.9663269158172896,
+      "f1": 0.9638164087503294,
+      "support": 13245
+    },
+    {
+      "label_name": "night_dominant",
+      "precision": 0.9926242717243089,
+      "recall": 0.9894964473277726,
+      "f1": 0.991057891642687,
+      "support": 16185
+    }
+  ],
+  "config": {
+    "data": {
+      "data_path": "/Users/syn/my/projects/gp/models/data/processed/classification/classification_day_labels.csv",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15
+    },
+    "model": {
+      "num_classes": 0,
+      "num_boost_round": 2000,
+      "learning_rate": 0.05,
+      "max_depth": 6,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "min_child_weight": 2.0,
+      "gamma": 0.0,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0,
+      "max_bin": 256,
+      "tree_method": "hist",
+      "nthread": 0
+    },
+    "train": {
+      "output_dir": "/Users/syn/my/projects/gp/models/classification/xgboost/output",
+      "seed": 42,
+      "eval_metric": "mlogloss",
+      "early_stopping_rounds": 20,
+      "early_stopping_min_delta": 0.0005,
+      "verbose_eval": 20
+    },
+    "test": {
+      "checkpoint_path": null,
+      "output_dir": "/Users/syn/my/projects/gp/models/classification/xgboost/output"
+    },
+    "predict": {
+      "checkpoint_path": null,
+      "output_dir": "/Users/syn/my/projects/gp/models/classification/xgboost/output"
+    }
+  },
+  "runtime": {
+    "library": "xgboost",
+    "best_iteration": 827
+  },
+  "artifacts": {
+    "confusion_matrix": "/Users/syn/my/projects/gp/models/classification/xgboost/output/test_confusion_matrix.png",
+    "confusion_matrix_normalized": "/Users/syn/my/projects/gp/models/classification/xgboost/output/test_confusion_matrix_normalized.png",
+    "per_class_metrics": "/Users/syn/my/projects/gp/models/classification/xgboost/output/test_per_class_metrics.png"
+  }
+}

@@ -9,7 +9,7 @@ import yaml
 
 from common.config_validation import validate_config_schema
 from common.device import detect_device
-from forecast.LSTM.constants import ALL_FEATURE_NAMES
+from forecast.LSTM.constants import ALL_FEATURE_NAMES, TARGET_LENGTH
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "config.yaml"
@@ -178,7 +178,7 @@ def load_experiment_config(
         hidden_size=int(model_raw.get("hidden_size", 128)),
         num_layers=int(model_raw.get("num_layers", 2)),
         dropout=float(model_raw.get("dropout", 0.2)),
-        target_length=int(model_raw.get("target_length", 96)),
+        target_length=int(model_raw.get("target_length", TARGET_LENGTH)),
         teacher_forcing_ratio=float(
             model_raw.get("teacher_forcing_ratio", 0.5)
         ),

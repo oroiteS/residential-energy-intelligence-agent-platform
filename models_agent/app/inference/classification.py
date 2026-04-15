@@ -1,4 +1,4 @@
-"""TCN 分类推理实现。"""
+"""XGBoost 分类推理实现。"""
 
 from __future__ import annotations
 
@@ -8,35 +8,84 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import torch
-from torch import nn
 
 
 LABELS = [
-    "day_high_night_low",
-    "day_low_night_high",
-    "all_day_high",
-    "all_day_low",
+    "daytime_active",
+    "daytime_peak_strong",
+    "flat_stable",
+    "night_dominant",
 ]
+LABEL_DISPLAY_NAMES = {
+    "daytime_active": "白天活跃型",
+    "daytime_peak_strong": "白天尖峰明显型",
+    "flat_stable": "平稳基线型",
+    "night_dominant": "夜间主导型",
+}
 SEQUENCE_LENGTH = 96
-FEATURE_NAMES = (
-    "aggregate",
-    "slot_sin",
-    "slot_cos",
+FEATURE_NAMES = ("aggregate",)
+BLOCK_SIZE = 12
+NUM_BLOCKS = SEQUENCE_LENGTH // BLOCK_SIZE
+AGGREGATE_COLUMNS = tuple(f"aggregate_{index:03d}" for index in range(SEQUENCE_LENGTH))
+TABULAR_FEATURE_NAMES = (
+    "full_mean",
+    "full_std",
+    "full_min",
+    "full_max",
+    "full_range",
+    "load_factor",
+    "p10",
+    "p25",
+    "p50",
+    "p75",
+    "p90",
+    "day_mean",
+    "night_mean",
+    "day_std",
+    "night_std",
+    "day_night_diff",
+    "day_night_ratio",
+    "night_day_ratio",
+    "morning_mean",
+    "daytime_mean",
+    "evening_mean",
+    "overnight_mean",
+    "peak_value",
+    "peak_slot_index_norm",
+    "valley_value",
+    "valley_slot_index_norm",
+    "peak_to_mean_ratio",
+    "ramp_abs_mean",
+    "ramp_abs_std",
+    "ramp_abs_max",
+    "ramp_up_mean",
+    "ramp_down_mean",
+    "high_load_ratio",
+    "low_load_ratio",
     "weekday_sin",
     "weekday_cos",
+    "is_weekend",
+    "block_mean_00",
+    "block_mean_01",
+    "block_mean_02",
+    "block_mean_03",
+    "block_mean_04",
+    "block_mean_05",
+    "block_mean_06",
+    "block_mean_07",
 )
-INPUT_CHANNELS = len(FEATURE_NAMES)
-INDEX_TO_LABEL = {index: label for index, label in enumerate(LABELS)}
+DAY_START_SLOT = 32
+DAY_END_SLOT = 72
+
+
+@dataclass(slots=True)
+class ClassificationDataConfig:
+    labels: list[str]
 
 
 @dataclass(slots=True)
 class ClassificationModelConfig:
-    input_channels: int
-    num_classes: int
-    channel_sizes: list[int]
-    kernel_size: int
-    dropout: float
+    num_boost_round: int
 
 
 @dataclass(slots=True)
@@ -47,20 +96,21 @@ class ClassificationPredictConfig:
 
 @dataclass(slots=True)
 class ClassificationExperimentConfig:
+    data: ClassificationDataConfig
     model: ClassificationModelConfig
     predict: ClassificationPredictConfig
     train_output_dir: Path
 
 
-def detect_device() -> str:
-    if torch.cuda.is_available():
-        return "cuda"
-
-    mps_backend = getattr(torch.backends, "mps", None)
-    if mps_backend is not None and mps_backend.is_available():
-        return "mps"
-
-    return "cpu"
+def _import_xgboost():
+    try:
+        import xgboost as xgb
+    except Exception as exc:  # pragma: no cover - 运行期环境相关
+        raise RuntimeError(
+            "当前环境缺少 xgboost 依赖，分类推理无法运行。"
+            "请在 models_agent 环境中安装 xgboost。"
+        ) from exc
+    return xgb
 
 
 def _resolve_path(path_value: str | None, base_dir: Path) -> Path | None:
@@ -79,317 +129,246 @@ def load_config(config_path: Path) -> ClassificationExperimentConfig:
     raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     base_dir = config_path.parent.parent
 
+    data_raw = raw_config.get("data", {})
     model_raw = raw_config.get("model", {})
-    predict_raw = raw_config.get("predict", {})
     train_raw = raw_config.get("train", {})
+    predict_raw = raw_config.get("predict", {})
 
-    model = ClassificationModelConfig(
-        input_channels=int(model_raw.get("input_channels", INPUT_CHANNELS)),
-        num_classes=int(model_raw.get("num_classes", len(LABELS))),
-        channel_sizes=[
-            int(value) for value in model_raw.get("channel_sizes", [32, 64, 128])
-        ],
-        kernel_size=int(model_raw.get("kernel_size", 3)),
-        dropout=float(model_raw.get("dropout", 0.2)),
+    data_config = ClassificationDataConfig(
+        labels=[str(label) for label in data_raw.get("labels", LABELS)],
+    )
+    model_config = ClassificationModelConfig(
+        num_boost_round=int(model_raw.get("num_boost_round", 2000)),
     )
     train_output_dir = _resolve_path(
         str(
             train_raw.get(
                 "output_dir",
-                "../models_agent/checkpoints/classification/tcn",
+                "../models_agent/checkpoints/classification/xgboost",
             )
         ),
         base_dir,
     )
     checkpoint_raw = predict_raw.get("checkpoint_path")
-    predict = ClassificationPredictConfig(
+    predict_config = ClassificationPredictConfig(
         checkpoint_path=(
-            _resolve_path(str(checkpoint_raw), base_dir)
-            if checkpoint_raw
-            else None
+            _resolve_path(str(checkpoint_raw), base_dir) if checkpoint_raw else None
         ),
         batch_size=int(predict_raw.get("batch_size", 128)),
     )
-    if model.input_channels != INPUT_CHANNELS:
-        raise ValueError(f"model.input_channels 必须等于 {INPUT_CHANNELS}")
+
+    if not data_config.labels:
+        raise ValueError("classification.data.labels 不能为空")
+    if len(set(data_config.labels)) != len(data_config.labels):
+        raise ValueError("classification.data.labels 不允许重复")
+    if model_config.num_boost_round <= 0:
+        raise ValueError("classification.model.num_boost_round 必须大于 0")
+
     return ClassificationExperimentConfig(
-        model=model,
-        predict=predict,
+        data=data_config,
+        model=model_config,
+        predict=predict_config,
         train_output_dir=train_output_dir,
     )
 
 
-class Chomp1d(nn.Module):
-    """裁掉因因果卷积补齐带来的尾部长度。"""
-
-    def __init__(self, chomp_size: int) -> None:
-        super().__init__()
-        self.chomp_size = chomp_size
-
-    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
-        if self.chomp_size == 0:
-            return tensor
-        return tensor[:, :, :-self.chomp_size].contiguous()
-
-
-class TemporalBlock(nn.Module):
-    """带残差连接的 TCN 基础模块。"""
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-        dilation: int,
-        dropout: float,
-    ) -> None:
-        super().__init__()
-        padding = (kernel_size - 1) * dilation
-
-        self.conv1 = nn.Conv1d(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            dilation=dilation,
-        )
-        self.chomp1 = Chomp1d(padding)
-        self.relu1 = nn.ReLU()
-        self.dropout1 = nn.Dropout(dropout)
-
-        self.conv2 = nn.Conv1d(
-            out_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            dilation=dilation,
-        )
-        self.chomp2 = Chomp1d(padding)
-        self.relu2 = nn.ReLU()
-        self.dropout2 = nn.Dropout(dropout)
-
-        self.downsample = (
-            nn.Conv1d(in_channels, out_channels, kernel_size=1)
-            if in_channels != out_channels
-            else None
-        )
-        self.final_relu = nn.ReLU()
-
-    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
-        out = self.conv1(tensor)
-        out = self.chomp1(out)
-        out = self.relu1(out)
-        out = self.dropout1(out)
-
-        out = self.conv2(out)
-        out = self.chomp2(out)
-        out = self.relu2(out)
-        out = self.dropout2(out)
-
-        residual = tensor if self.downsample is None else self.downsample(tensor)
-        return self.final_relu(out + residual)
-
-
-class TCNClassifier(nn.Module):
-    """面向 96x5 日级样本的 TCN 四分类器。"""
-
-    def __init__(
-        self,
-        input_channels: int = INPUT_CHANNELS,
-        num_classes: int = 4,
-        channel_sizes: list[int] | None = None,
-        kernel_size: int = 3,
-        dropout: float = 0.2,
-    ) -> None:
-        super().__init__()
-        if channel_sizes is None:
-            channel_sizes = [32, 64, 128]
-
-        layers: list[nn.Module] = []
-        in_channels = input_channels
-        for block_index, out_channels in enumerate(channel_sizes):
-            layers.append(
-                TemporalBlock(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    kernel_size=kernel_size,
-                    dilation=2**block_index,
-                    dropout=dropout,
-                )
-            )
-            in_channels = out_channels
-
-        self.network = nn.Sequential(*layers)
-        self.pool = nn.AdaptiveAvgPool1d(1)
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(channel_sizes[-1], channel_sizes[-1] // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(channel_sizes[-1] // 2, num_classes),
-        )
-
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        if features.ndim != 3:
-            raise ValueError(
-                f"输入维度应为 [batch, seq_len, channels]，实际为 {tuple(features.shape)}"
-            )
-        temporal_features = features.transpose(1, 2)
-        encoded = self.network(temporal_features)
-        pooled = self.pool(encoded)
-        return self.classifier(pooled)
-
-
-def build_model(model_config: ClassificationModelConfig) -> TCNClassifier:
-    return TCNClassifier(
-        input_channels=model_config.input_channels,
-        num_classes=model_config.num_classes,
-        channel_sizes=model_config.channel_sizes,
-        kernel_size=model_config.kernel_size,
-        dropout=model_config.dropout,
+def get_checkpoint_path(config_path: Path) -> Path:
+    experiment_config = load_config(config_path)
+    return experiment_config.predict.checkpoint_path or (
+        experiment_config.train_output_dir / "best_model.json"
     )
 
 
-def load_checkpoint(checkpoint_path: Path, device: torch.device) -> dict[str, Any]:
-    return torch.load(checkpoint_path, map_location=device)
+def load_model(model_path: Path):
+    xgb = _import_xgboost()
+    booster = xgb.Booster()
+    booster.load_model(model_path)
+    return booster
 
 
-def _resolve_model_config(
-    fallback_model_config: ClassificationModelConfig,
-    checkpoint: dict[str, Any],
-) -> ClassificationModelConfig:
-    raw_config = checkpoint.get("config")
-    if not isinstance(raw_config, dict):
-        return fallback_model_config
+def _safe_ratio(
+    numerator: float,
+    denominator: float,
+    epsilon: float = 1e-6,
+) -> float:
+    return float(numerator / max(denominator, epsilon))
 
-    model_raw = raw_config.get("model")
-    if not isinstance(model_raw, dict):
-        return fallback_model_config
 
-    resolved_model_config = ClassificationModelConfig(
-        input_channels=int(
-            model_raw.get("input_channels", fallback_model_config.input_channels)
-        ),
-        num_classes=int(
-            model_raw.get("num_classes", fallback_model_config.num_classes)
-        ),
-        channel_sizes=[
-            int(value)
-            for value in model_raw.get(
-                "channel_sizes",
-                fallback_model_config.channel_sizes,
-            )
-        ],
-        kernel_size=int(model_raw.get("kernel_size", fallback_model_config.kernel_size)),
-        dropout=float(model_raw.get("dropout", fallback_model_config.dropout)),
+def _compute_weekday_features(date_value: str) -> tuple[float, float, float]:
+    parsed = pd.to_datetime(date_value)
+    if pd.isna(parsed):
+        raise ValueError("分类样本需要合法的 date 字段")
+    weekday_index = float(parsed.dayofweek)
+    weekday_angle = 2.0 * np.pi * weekday_index / 7.0
+    return (
+        float(np.sin(weekday_angle)),
+        float(np.cos(weekday_angle)),
+        float(1.0 if int(weekday_index) >= 5 else 0.0),
     )
-    if resolved_model_config.input_channels != INPUT_CHANNELS:
-        raise ValueError(f"checkpoint 中的 input_channels 必须等于 {INPUT_CHANNELS}")
-    return resolved_model_config
 
 
-def checkpoint_to_normalization(
-    checkpoint: dict[str, Any],
-) -> tuple[np.ndarray, np.ndarray]:
-    mean = np.asarray(checkpoint["feature_mean"], dtype=np.float32)
-    std = np.asarray(checkpoint["feature_std"], dtype=np.float32)
-    return mean, std
-
-
-def _normalize_features(
-    features: np.ndarray,
-    mean: np.ndarray,
-    std: np.ndarray,
+def build_tabular_feature_vector(
+    aggregate_values: np.ndarray,
+    date_value: str,
 ) -> np.ndarray:
-    safe_std = np.where(std < 1e-6, 1.0, std).astype(np.float32)
-    return (features.astype(np.float32) - mean.astype(np.float32)) / safe_std
+    if aggregate_values.shape != (SEQUENCE_LENGTH,):
+        raise ValueError(f"aggregate 序列长度必须为 {SEQUENCE_LENGTH}")
 
+    aggregate = aggregate_values.astype(np.float32)
+    day_values = aggregate[DAY_START_SLOT:DAY_END_SLOT]
+    night_values = np.concatenate([aggregate[:DAY_START_SLOT], aggregate[DAY_END_SLOT:]])
+    morning_values = aggregate[24:40]
+    daytime_values = aggregate[40:64]
+    evening_values = aggregate[64:88]
+    overnight_values = np.concatenate([aggregate[:24], aggregate[88:]])
+    quantiles = np.quantile(aggregate, [0.10, 0.25, 0.50, 0.75, 0.90]).astype(np.float32)
+    ramp = np.diff(aggregate, prepend=aggregate[0])
+    ramp_abs = np.abs(ramp)
+    ramp_up = ramp[ramp > 0]
+    ramp_down = np.abs(ramp[ramp < 0])
 
-def _build_temporal_feature_sequences(date_value: str) -> dict[str, list[float]]:
-    base_date = pd.to_datetime(date_value)
-    if pd.isna(base_date):
-        raise ValueError("无法根据 timestamp 自动生成时间特征，请提供合法时间")
+    peak_index = int(np.argmax(aggregate))
+    valley_index = int(np.argmin(aggregate))
+    peak_value = float(aggregate[peak_index])
+    valley_value = float(aggregate[valley_index])
+    full_mean = float(aggregate.mean())
+    full_max = float(aggregate.max())
+    full_min = float(aggregate.min())
+    full_std = float(aggregate.std())
+    p25 = float(quantiles[1])
+    p75 = float(quantiles[3])
+    weekday_sin, weekday_cos, is_weekend = _compute_weekday_features(date_value)
 
-    timestamps = pd.date_range(
-        start=base_date.normalize(),
-        periods=SEQUENCE_LENGTH,
-        freq="15min",
-    )
-    slot_index = timestamps.hour * 4 + timestamps.minute // 15
-    weekday_index = timestamps.dayofweek
-    slot_angle = 2.0 * np.pi * slot_index.to_numpy(dtype=np.float32) / 96.0
-    weekday_angle = 2.0 * np.pi * weekday_index.to_numpy(dtype=np.float32) / 7.0
-    return {
-        "slot_sin": np.sin(slot_angle).astype(np.float32).tolist(),
-        "slot_cos": np.cos(slot_angle).astype(np.float32).tolist(),
-        "weekday_sin": np.sin(weekday_angle).astype(np.float32).tolist(),
-        "weekday_cos": np.cos(weekday_angle).astype(np.float32).tolist(),
+    block_means = aggregate.reshape(NUM_BLOCKS, BLOCK_SIZE).mean(axis=1).astype(np.float32)
+    feature_values = {
+        "full_mean": full_mean,
+        "full_std": full_std,
+        "full_min": full_min,
+        "full_max": full_max,
+        "full_range": full_max - full_min,
+        "load_factor": _safe_ratio(full_mean, full_max),
+        "p10": float(quantiles[0]),
+        "p25": p25,
+        "p50": float(quantiles[2]),
+        "p75": p75,
+        "p90": float(quantiles[4]),
+        "day_mean": float(day_values.mean()),
+        "night_mean": float(night_values.mean()),
+        "day_std": float(day_values.std()),
+        "night_std": float(night_values.std()),
+        "day_night_diff": float(day_values.mean() - night_values.mean()),
+        "day_night_ratio": _safe_ratio(float(day_values.mean()), float(night_values.mean())),
+        "night_day_ratio": _safe_ratio(float(night_values.mean()), float(day_values.mean())),
+        "morning_mean": float(morning_values.mean()),
+        "daytime_mean": float(daytime_values.mean()),
+        "evening_mean": float(evening_values.mean()),
+        "overnight_mean": float(overnight_values.mean()),
+        "peak_value": peak_value,
+        "peak_slot_index_norm": float(peak_index / (len(aggregate) - 1)),
+        "valley_value": valley_value,
+        "valley_slot_index_norm": float(valley_index / (len(aggregate) - 1)),
+        "peak_to_mean_ratio": _safe_ratio(peak_value, full_mean),
+        "ramp_abs_mean": float(ramp_abs.mean()),
+        "ramp_abs_std": float(ramp_abs.std()),
+        "ramp_abs_max": float(ramp_abs.max()),
+        "ramp_up_mean": float(ramp_up.mean()) if len(ramp_up) else 0.0,
+        "ramp_down_mean": float(ramp_down.mean()) if len(ramp_down) else 0.0,
+        "high_load_ratio": float((aggregate > p75).mean()),
+        "low_load_ratio": float((aggregate < p25).mean()),
+        "weekday_sin": weekday_sin,
+        "weekday_cos": weekday_cos,
+        "is_weekend": is_weekend,
     }
+    for block_index, block_mean in enumerate(block_means):
+        feature_values[f"block_mean_{block_index:02d}"] = float(block_mean)
+
+    return np.asarray(
+        [feature_values[feature_name] for feature_name in TABULAR_FEATURE_NAMES],
+        dtype=np.float32,
+    )
 
 
-def _build_feature_values(sample: dict[str, Any]) -> dict[str, list[float]]:
+def _predict_probabilities(
+    booster,
+    features: np.ndarray,
+    fallback_rounds: int,
+) -> np.ndarray:
+    xgb = _import_xgboost()
+    dmatrix = xgb.DMatrix(features, feature_names=list(TABULAR_FEATURE_NAMES))
+
+    best_iteration = getattr(booster, "best_iteration", None)
+    if best_iteration is not None and int(best_iteration) >= 0:
+        probabilities = booster.predict(
+            dmatrix,
+            iteration_range=(0, int(best_iteration) + 1),
+        )
+    elif fallback_rounds > 0:
+        probabilities = booster.predict(
+            dmatrix,
+            iteration_range=(0, fallback_rounds),
+        )
+    else:
+        probabilities = booster.predict(dmatrix)
+
+    probability_array = np.asarray(probabilities, dtype=np.float32)
+    if probability_array.ndim == 1:
+        probability_array = probability_array[:, np.newaxis]
+    return probability_array
+
+
+def _probability_field_name(label: str) -> str:
+    return f"prob_{label.replace('-', '_')}"
+
+
+def predict_single_sample(
+    sample: dict[str, Any],
+    config_path: Path,
+) -> dict[str, Any]:
     aggregate = sample.get("aggregate")
-    if not isinstance(aggregate, list) or len(aggregate) != SEQUENCE_LENGTH:
-        raise ValueError("aggregate 输入序列长度必须为 96")
+    if aggregate is None or len(aggregate) != SEQUENCE_LENGTH:
+        raise ValueError(f"aggregate 输入序列长度必须为 {SEQUENCE_LENGTH}")
 
     date_value = str(sample.get("date", "")).strip()
     if not date_value:
-        date_value = str(sample.get("timestamp", "")).strip()
-    temporal_sequences = _build_temporal_feature_sequences(date_value)
+        raise ValueError("分类推理需要提供 date")
 
-    return {
-        "aggregate": [float(value) for value in aggregate],
-        "slot_sin": temporal_sequences["slot_sin"],
-        "slot_cos": temporal_sequences["slot_cos"],
-        "weekday_sin": temporal_sequences["weekday_sin"],
-        "weekday_cos": temporal_sequences["weekday_cos"],
-    }
-
-
-def predict_single_sample(sample: dict[str, Any], config_path: Path) -> dict[str, Any]:
     experiment_config = load_config(config_path)
-    checkpoint_path = experiment_config.predict.checkpoint_path or (
-        experiment_config.train_output_dir / "best_model.pt"
-    )
-    device_name = detect_device()
-    device = torch.device(device_name)
-    checkpoint = load_checkpoint(checkpoint_path, device)
-    model_config = _resolve_model_config(experiment_config.model, checkpoint)
-    feature_mean, feature_std = checkpoint_to_normalization(checkpoint)
+    checkpoint_path = get_checkpoint_path(config_path)
+    booster = load_model(checkpoint_path)
 
-    feature_values = _build_feature_values(sample)
-    features = np.stack(
-        [
-            np.asarray(feature_values["aggregate"], dtype=np.float32),
-            np.asarray(feature_values["slot_sin"], dtype=np.float32),
-            np.asarray(feature_values["slot_cos"], dtype=np.float32),
-            np.asarray(feature_values["weekday_sin"], dtype=np.float32),
-            np.asarray(feature_values["weekday_cos"], dtype=np.float32),
-        ],
-        axis=-1,
-    )
-    normalized = _normalize_features(
-        features[np.newaxis, ...],
-        feature_mean,
-        feature_std,
-    )
+    features = build_tabular_feature_vector(
+        np.asarray(aggregate, dtype=np.float32),
+        date_value=date_value,
+    )[np.newaxis, :]
+    probabilities = _predict_probabilities(
+        booster=booster,
+        features=features,
+        fallback_rounds=experiment_config.model.num_boost_round,
+    )[0]
 
-    model = build_model(model_config).to(device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
+    label_names = experiment_config.data.labels
+    if len(probabilities) != len(label_names):
+        raise ValueError(
+            f"模型输出类别数与配置 labels 不一致："
+            f"output={len(probabilities)} labels={len(label_names)}"
+        )
 
-    with torch.no_grad():
-        logits = model(torch.from_numpy(normalized).to(device))
-        probabilities = torch.softmax(logits, dim=1).cpu().numpy()[0]
-
-    label_index = int(probabilities.argmax())
-    return {
-        "predicted_label": INDEX_TO_LABEL[label_index],
-        "confidence": float(probabilities[label_index]),
-        "prob_day_high_night_low": float(probabilities[0]),
-        "prob_day_low_night_high": float(probabilities[1]),
-        "prob_all_day_high": float(probabilities[2]),
-        "prob_all_day_low": float(probabilities[3]),
-        "runtime_device": device_name,
-        "runtime_loss": "CrossEntropyLoss",
+    label_index = int(np.argmax(probabilities))
+    probability_map = {
+        label_names[index]: float(probabilities[index])
+        for index in range(len(label_names))
     }
+    result: dict[str, Any] = {
+        "predicted_label": label_names[label_index],
+        "confidence": float(probabilities[label_index]),
+        "probabilities": probability_map,
+        "runtime_library": "xgboost",
+        "best_iteration": (
+            int(getattr(booster, "best_iteration"))
+            if getattr(booster, "best_iteration", None) is not None
+            else None
+        ),
+    }
+    for label_name, probability in probability_map.items():
+        result[_probability_field_name(label_name)] = probability
+    return result

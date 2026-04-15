@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from classification.TCN.constants import LABELS, SEQUENCE_LENGTH
+SEQUENCE_LENGTH = 96
 
 BLOCK_SIZE = 12
 NUM_BLOCKS = SEQUENCE_LENGTH // BLOCK_SIZE
+AGGREGATE_COLUMNS = tuple(f"aggregate_{index:03d}" for index in range(SEQUENCE_LENGTH))
 
 TABULAR_FEATURE_NAMES = (
     "full_mean",
@@ -56,8 +57,8 @@ TABULAR_FEATURE_NAMES = (
 )
 
 __all__ = [
+    "AGGREGATE_COLUMNS",
     "BLOCK_SIZE",
-    "LABELS",
     "NUM_BLOCKS",
     "SEQUENCE_LENGTH",
     "TABULAR_FEATURE_NAMES",
