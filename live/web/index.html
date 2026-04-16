@@ -15,7 +15,7 @@
           <p class="eyebrow">实时演示 / LIVE</p>
           <h1>本地虚拟住户实时用电界面</h1>
           <p class="hero-copy">
-            每 1 秒推进 1 个虚拟 15 分钟点，自动刷新今日负荷、上一日分类与下一日预测。
+            每 1 秒推进 1 个虚拟 15 分钟点，从第 8 个虚拟日开始播放，同时展示今日实测、今日预测与次日预测。
           </p>
         </div>
         <aside class="hero-panel">
@@ -36,6 +36,10 @@
               <span>家庭标识</span>
               <strong id="house-id">--</strong>
             </div>
+            <div>
+              <span>数据文件</span>
+              <strong id="data-file">--</strong>
+            </div>
           </div>
         </aside>
       </header>
@@ -43,7 +47,7 @@
       <main class="dashboard-grid">
         <section class="card accent-card">
           <div class="card-title-row">
-            <h2>今日实时负荷</h2>
+            <h2>今日负荷与双预测对比</h2>
             <span id="today-progress" class="pill">0%</span>
           </div>
           <div id="trend-chart" class="chart-panel"></div>
@@ -88,7 +92,7 @@
 
         <section class="card">
           <div class="card-title-row">
-            <h2>下一日预测</h2>
+            <h2>次日预测摘要</h2>
             <span id="forecast-date" class="card-caption">--</span>
           </div>
           <div class="tag-stack">

@@ -3,6 +3,8 @@ package service
 import (
 	"testing"
 	"time"
+
+	"residential-energy-intelligence-agent-platform/internal/domain"
 )
 
 func TestSelectClassificationWindowPicksLatestCompleteDay(t *testing.T) {
@@ -28,5 +30,33 @@ func TestSelectClassificationWindowPicksLatestCompleteDay(t *testing.T) {
 	}
 	if got := windowStart.Format("2006-01-02"); got != "2026-04-02" {
 		t.Fatalf("windowStart date = %s, want 2026-04-02", got)
+	}
+}
+
+func TestClassificationRecordDTOReturnsV1Fields(t *testing.T) {
+	record := &domain.ClassificationResultRecord{
+		ID:             1,
+		DatasetID:      2,
+		ModelType:      "xgboost",
+		PredictedLabel: "day_low_night_high",
+		Confidence:     0.9187,
+	}
+
+	dto := classificationRecordDTO(record)
+
+	if modelType, _ := dto["model_type"].(string); modelType != "xgboost" {
+		t.Fatalf("model_type = %v, want xgboost", dto["model_type"])
+	}
+	if schemaVersion, _ := dto["schema_version"].(string); schemaVersion != "v1" {
+		t.Fatalf("schema_version = %v, want v1", dto["schema_version"])
+	}
+	if labelDisplayName, _ := dto["label_display_name"].(string); labelDisplayName != "白天低晚上高型" {
+		t.Fatalf("label_display_name = %v, want 白天低晚上高型", dto["label_display_name"])
+	}
+}
+
+func TestNormalizedClassificationModelTypeDefaultsToXGBoost(t *testing.T) {
+	if got := normalizedClassificationModelType(""); got != "xgboost" {
+		t.Fatalf("normalizedClassificationModelType(\"\") = %s, want xgboost", got)
 	}
 }

@@ -9,6 +9,19 @@ import { PageHero } from '@/components/common/PageHero'
 import { SectionCard } from '@/components/common/SectionCard'
 
 const liveBaseUrl = (import.meta.env.VITE_LIVE_BASE_URL as string | undefined)?.trim() || 'http://127.0.0.1:8090'
+const liveEmbedVersion = '20260417-today-forecast'
+
+function buildLiveEmbedUrl(baseUrl: string, frameKey: number) {
+  try {
+    const url = new URL(baseUrl)
+    url.searchParams.set('embed_version', liveEmbedVersion)
+    url.searchParams.set('frame_key', String(frameKey))
+    return url.toString()
+  } catch {
+    const separator = baseUrl.includes('?') ? '&' : '?'
+    return `${baseUrl}${separator}embed_version=${liveEmbedVersion}&frame_key=${frameKey}`
+  }
+}
 
 export function LivePage() {
   const [frameKey, setFrameKey] = useState(0)
@@ -57,7 +70,7 @@ export function LivePage() {
             <div className="live-embed-frame">
               <iframe
                 key={frameKey}
-                src={liveBaseUrl}
+                src={buildLiveEmbedUrl(liveBaseUrl, frameKey)}
                 title="实时用电演示"
                 loading="lazy"
               />

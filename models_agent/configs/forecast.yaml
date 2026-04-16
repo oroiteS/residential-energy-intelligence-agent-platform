@@ -1,62 +1,24 @@
-# 预测模型本地推理配置
+# TFT 预测模型本地推理配置
 
-default_model_type: "lstm"
+default_model_type: "tft"
 
-data:
-  feature_names:
-    - "aggregate"
-    - "slot_sin"
-    - "slot_cos"
-    - "weekday_sin"
-    - "weekday_cos"
-    - "active_appliance_count"
-    - "burst_event_count"
-  aggregate_normalization: "input_window"
-  aggregate_norm_eps: 1.0e-6
-
-lstm:
-  train_output_dir: "../models_agent/checkpoints/forecast/lstm"
-  model:
-    input_size: 7
-    hidden_size: 256
-    num_layers: 3
-    dropout: 0.2
-    target_length: 96
-    input_length: 672
-  predict:
-    checkpoint_path: "../models_agent/checkpoints/forecast/lstm/best_model.pt"
-    batch_size: 128
-
-transformer_encoder_direct:
-  train_output_dir: "../models_agent/checkpoints/forecast/transformer_encoder_direct"
-  model:
-    input_size: 7
-    d_model: 256
-    num_layers: 3
-    num_heads: 8
-    ffn_dim: 512
-    dropout: 0.2
-    target_length: 96
-    patch_length: 16
-    patch_stride: 8
-    input_length: 672
-  predict:
-    checkpoint_path: "../models_agent/checkpoints/forecast/transformer_encoder_direct/best_model.pt"
-    batch_size: 128
-
-transformer_encdec_direct:
-  train_output_dir: "../models_agent/checkpoints/forecast/transformer_encdec_direct"
-  model:
-    input_size: 7
-    d_model: 256
-    num_layers: 3
-    num_heads: 8
-    ffn_dim: 512
-    dropout: 0.2
-    target_length: 96
-    patch_length: 16
-    patch_stride: 8
-    input_length: 672
-  predict:
-    checkpoint_path: "../models_agent/checkpoints/forecast/transformer_encdec_direct/best_model.pt"
-    batch_size: 128
+tft:
+  # 默认读取 models_agent 本地 checkpoint；可按需替换为新的 best.ckpt
+  checkpoint_path: "../models_agent/checkpoints/forecast/tft/best.ckpt"
+  # 用于构造 7 天历史 profile 概率特征的日级分类器配置
+  profile_classifier_config_path: "../models_agent/configs/forecast_profile_classification.yaml"
+  # profile 概率特征顺序必须与 TFT 训练时保持一致
+  profile_labels:
+    - "afternoon_peak"
+    - "all_day_low"
+    - "day_low_night_high"
+    - "morning_peak"
+  # 最近 7 天，每天 96 个 15min 点
+  input_length: 672
+  # 预测未来 1 天，共 96 个点
+  target_length: 96
+  # 与训练保持一致的 baseline 权重
+  baseline_week_weight: 0.8
+  baseline_recent_weight: 0.2
+  # 与训练保持一致的样本内归一化分位数
+  normalization_quantile: 0.95

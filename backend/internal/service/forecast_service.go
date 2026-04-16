@@ -75,6 +75,7 @@ func (s *ForecastService) Predict(ctx context.Context, datasetID uint64, input F
 	if appErr != nil {
 		return nil, appErr
 	}
+	storageModelType := persistedForecastModelType(modelType)
 	if err := validateForecastRange(input.ForecastStart, input.ForecastEnd); err != nil {
 		return nil, apperror.Unprocessable("INVALID_REQUEST", err.Error(), nil)
 	}
@@ -100,7 +101,7 @@ func (s *ForecastService) Predict(ctx context.Context, datasetID uint64, input F
 	}
 
 	if !input.ForceRefresh {
-		if existing, err := s.forecastRepo.GetLatestByRange(ctx, datasetID, modelType, input.ForecastStart, input.ForecastEnd, granularity); err == nil {
+		if existing, err := s.forecastRepo.GetLatestByRange(ctx, datasetID, storageModelType, input.ForecastStart, input.ForecastEnd, granularity); err == nil {
 			return map[string]any{"forecast": forecastRecordDTO(existing)}, nil
 		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, apperror.Internal(err)
@@ -133,7 +134,7 @@ func (s *ForecastService) Predict(ctx context.Context, datasetID uint64, input F
 	}
 	record := &domain.ForecastResultRecord{
 		DatasetID:     datasetID,
-		ModelType:     modelType,
+		ModelType:     storageModelType,
 		ForecastStart: input.ForecastStart,
 		ForecastEnd:   input.ForecastEnd,
 		Granularity:   granularity,
@@ -225,7 +226,12 @@ func (s *ForecastService) List(ctx context.Context, datasetID uint64, params For
 		return nil, apperror.ServiceUnavailable("INTERNAL_ERROR", "数据库未配置，暂不支持读取预测结果", nil)
 	}
 
-	records, total, err := s.forecastRepo.ListByDatasetID(ctx, datasetID, strings.ToLower(strings.TrimSpace(params.ModelType)), params.Page, params.PageSize)
+	modelTypeFilter := strings.ToLower(strings.TrimSpace(params.ModelType))
+	if normalized := persistedForecastModelType(modelTypeFilter); normalized != "" {
+		modelTypeFilter = normalized
+	}
+
+	records, total, err := s.forecastRepo.ListByDatasetID(ctx, datasetID, modelTypeFilter, params.Page, params.PageSize)
 	if err != nil {
 		return nil, apperror.Internal(err)
 	}
@@ -287,12 +293,9 @@ func (s *ForecastService) Get(ctx context.Context, forecastID uint64) (map[strin
 }
 
 func normalizeForecastRequest(modelType, granularity string) (string, string, *apperror.AppError) {
-	normalizedModelType := strings.TrimSpace(strings.ToLower(modelType))
+	normalizedModelType := canonicalForecastModelType(modelType)
 	if normalizedModelType == "" {
-		normalizedModelType = "lstm"
-	}
-	if normalizedModelType != "lstm" && normalizedModelType != "transformer" {
-		return "", "", apperror.Unprocessable("INVALID_REQUEST", "当前仅支持 lstm 或 transformer 预测模型", map[string]any{"model_type": modelType})
+		return "", "", apperror.Unprocessable("INVALID_REQUEST", "当前仅支持 tft 预测模型", map[string]any{"model_type": modelType})
 	}
 
 	normalizedGranularity := strings.TrimSpace(strings.ToLower(granularity))
@@ -303,6 +306,22 @@ func normalizeForecastRequest(modelType, granularity string) (string, string, *a
 		return "", "", apperror.Unprocessable("INVALID_REQUEST", "当前仅支持 15min 粒度预测", map[string]any{"granularity": granularity})
 	}
 	return normalizedModelType, normalizedGranularity, nil
+}
+
+func canonicalForecastModelType(value string) string {
+	switch normalized := strings.TrimSpace(strings.ToLower(value)); normalized {
+	case "", "tft", "lstm", "transformer", "transformer_encoder_direct", "transformer_encdec_direct":
+		return "tft"
+	default:
+		return ""
+	}
+}
+
+func persistedForecastModelType(value string) string {
+	if canonicalForecastModelType(value) == "tft" {
+		return "transformer"
+	}
+	return ""
 }
 
 func validateForecastRange(start, end time.Time) error {
@@ -572,7 +591,7 @@ func (s *ForecastService) writeForecastDetail(record *domain.ForecastResultRecor
 	forecastPayload := map[string]any{
 		"id":             record.ID,
 		"dataset_id":     record.DatasetID,
-		"model_type":     record.ModelType,
+		"model_type":     canonicalForecastModelType(record.ModelType),
 		"forecast_start": summary.ForecastStart,
 		"forecast_end":   summary.ForecastEnd,
 		"granularity":    summary.Granularity,
@@ -601,7 +620,7 @@ func forecastRecordDTO(record *domain.ForecastResultRecord) map[string]any {
 	return map[string]any{
 		"id":             record.ID,
 		"dataset_id":     record.DatasetID,
-		"model_type":     record.ModelType,
+		"model_type":     canonicalForecastModelType(record.ModelType),
 		"forecast_start": record.ForecastStart,
 		"forecast_end":   record.ForecastEnd,
 		"granularity":    record.Granularity,

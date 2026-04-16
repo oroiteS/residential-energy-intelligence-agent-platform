@@ -283,12 +283,46 @@ func buildCandidateBaseURLs(baseURL string) []string {
 		return nil
 	}
 
-	candidates := []string{normalized}
-	for _, host := range []string{"models-agent", "host.docker.internal"} {
-		if fallback := replaceBaseURLHost(normalized, host, "127.0.0.1"); fallback != "" && fallback != normalized {
-			candidates = append(candidates, fallback)
+	candidates := make([]string, 0, 4)
+	appendCandidate := func(candidate string) {
+		candidate = strings.TrimRight(strings.TrimSpace(candidate), "/")
+		if candidate == "" {
+			return
 		}
+		for _, existing := range candidates {
+			if existing == candidate {
+				return
+			}
+		}
+		candidates = append(candidates, candidate)
 	}
+
+	appendCandidate(normalized)
+
+	host := ""
+	if parsed, err := url.Parse(normalized); err == nil {
+		host = strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	}
+
+	switch host {
+	case "127.0.0.1", "localhost":
+		appendCandidate(replaceBaseURLHost(normalized, host, "host.docker.internal"))
+	case "host.docker.internal":
+		appendCandidate(replaceBaseURLHost(normalized, host, "127.0.0.1"))
+		appendCandidate(replaceBaseURLHost(normalized, host, "localhost"))
+	case "models-agent":
+		appendCandidate(replaceBaseURLHost(normalized, host, "127.0.0.1"))
+		appendCandidate(replaceBaseURLHost(normalized, host, "localhost"))
+		appendCandidate(replaceBaseURLHost(normalized, host, "host.docker.internal"))
+	}
+
+	for _, aliasHost := range []string{"127.0.0.1", "localhost", "host.docker.internal"} {
+		if aliasHost == host {
+			continue
+		}
+		appendCandidate(replaceBaseURLHost(normalized, host, aliasHost))
+	}
+
 	return candidates
 }
 

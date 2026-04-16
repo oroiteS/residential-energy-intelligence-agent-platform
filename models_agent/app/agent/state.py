@@ -19,12 +19,7 @@ REPORT_SECTION_ORDER = ["总体概览", "行为判断", "预测风险", "附注"
 SUPPORTED_CLASSIFICATION_SCHEMA_VERSIONS = {"v1"}
 SUPPORTED_FORECAST_SCHEMA_VERSIONS = {"v1"}
 SUPPORTED_CLASSIFICATION_MODEL_TYPES = {"xgboost"}
-SUPPORTED_FORECAST_MODEL_TYPES = {
-    "transformer",
-    "lstm",
-    "transformer_encoder_direct",
-    "transformer_encdec_direct",
-}
+SUPPORTED_FORECAST_MODEL_TYPES = {"tft"}
 SUPPORTED_FORECAST_HORIZONS = {"1d"}
 SUPPORTED_RISK_FLAGS = {
     "evening_peak",
@@ -152,7 +147,7 @@ class ForecastSummary(LooseModel):
     """预测摘要。"""
 
     schema_version: str = "v1"
-    model_type: str = "transformer"
+    model_type: str = "tft"
     forecast_horizon: str = "1d"
     peak_period: str | None = None
     predicted_avg_load_w: float | None = None
@@ -172,7 +167,7 @@ class ForecastSummary(LooseModel):
     @field_validator("model_type")
     @classmethod
     def validate_forecast_model_type(cls, value: str) -> str:
-        normalized = str(value).strip() or "transformer"
+        normalized = str(value).strip() or "tft"
         if normalized not in SUPPORTED_FORECAST_MODEL_TYPES:
             raise ValueError("forecast_summary.model_type 不在支持的模型集合中")
         return normalized

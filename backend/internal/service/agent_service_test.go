@@ -68,7 +68,7 @@ func TestAgentServiceAskFallsBackWhenAgentClientFails(t *testing.T) {
 			record: &domain.ClassificationResultRecord{
 				ID:             9,
 				DatasetID:      1,
-				ModelType:      "tcn",
+				ModelType:      "xgboost",
 				PredictedLabel: "day_low_night_high",
 				Confidence:     0.91,
 				Probabilities:  probabilities,
@@ -123,6 +123,19 @@ func TestAgentServiceAskFallsBackWhenAgentClientFails(t *testing.T) {
 	if answer, _ := result["answer"].(string); answer == "" {
 		t.Fatal("answer 为空")
 	}
+	if confidence, ok := result["confidence_level"].(string); !ok || confidence != "medium" {
+		t.Fatalf("confidence_level = %v, want medium", result["confidence_level"])
+	}
+	if intent, ok := result["intent"].(string); !ok || intent == "" {
+		t.Fatalf("intent = %#v, want non-empty string", result["intent"])
+	}
+	missingInformation, ok := result["missing_information"].([]agentclient.MissingInformationItem)
+	if !ok {
+		t.Fatalf("missing_information 类型错误: %#v", result["missing_information"])
+	}
+	if len(missingInformation) != 0 {
+		t.Fatalf("missing_information = %#v, want empty", missingInformation)
+	}
 	actions, ok := result["actions"].([]string)
 	if !ok || len(actions) == 0 {
 		t.Fatalf("actions = %#v, want non-empty []string", result["actions"])
@@ -152,18 +165,29 @@ func TestAgentServiceAskUsesStoredHistoryAndPersistsMessages(t *testing.T) {
 	messageRepo := newAgentChatMessageRepo()
 	oldQuestion := "前一天整体负荷怎么样？"
 	oldAnswer := "峰时负荷偏高。"
+	forecastSummary, _ := json.Marshal(map[string]any{
+		"forecast_peak_periods": []string{"2026-04-03T19:00:00+08:00/2026-04-03T22:00:00+08:00"},
+		"risk_flags":            []string{"evening_peak_risk", "morning_spike_risk"},
+		"predicted_peak_load_w": 4820.5,
+	})
 	messageRepo.records = append(messageRepo.records,
 		domain.ChatMessageRecord{ID: 1, SessionID: 3, Role: "user", Content: &oldQuestion, CreatedAt: &now},
 		domain.ChatMessageRecord{ID: 2, SessionID: 3, Role: "assistant", Content: &oldAnswer, CreatedAt: &now},
 	)
 	messageRepo.nextID = 3
 
+	confidenceLevel := "high"
 	client := &recordingAgentClient{
 		response: &agentclient.AskResponse{
 			Answer:    "建议优先检查夜间设备。",
 			Citations: []agentclient.CitationItem{{Key: "predicted_label", Label: "行为类型", Value: "day_low_night_high"}},
 			Actions:   []string{"检查夜间持续运行设备"},
-			Degraded:  false,
+			MissingInformation: []agentclient.MissingInformationItem{
+				{Key: "appliance_detail", Question: "是否有夜间持续运行的大功率设备？", Reason: "当前缺少设备级别观测，无法进一步定位来源。"},
+			},
+			ConfidenceLevel: &confidenceLevel,
+			Intent:          "advice",
+			Degraded:        false,
 		},
 	}
 
@@ -201,12 +225,23 @@ func TestAgentServiceAskUsesStoredHistoryAndPersistsMessages(t *testing.T) {
 			record: &domain.ClassificationResultRecord{
 				ID:             9,
 				DatasetID:      1,
-				ModelType:      "tcn",
+				ModelType:      "xgboost",
 				PredictedLabel: "day_low_night_high",
 				Confidence:     0.91,
 			},
 		},
-		agentForecastRepo{},
+		agentForecastRepo{
+			records: []domain.ForecastResultRecord{
+				{
+					ID:          11,
+					DatasetID:   1,
+					ModelType:   "transformer",
+					Granularity: "15min",
+					Summary:     forecastSummary,
+					CreatedAt:   &now,
+				},
+			},
+		},
 		agentAdviceRepo{},
 		&SystemConfigService{},
 		client,
@@ -236,6 +271,16 @@ func TestAgentServiceAskUsesStoredHistoryAndPersistsMessages(t *testing.T) {
 	if answer, _ := result["answer"].(string); answer == "" {
 		t.Fatal("answer 为空")
 	}
+	if confidence, ok := result["confidence_level"].(string); !ok || confidence != "high" {
+		t.Fatalf("confidence_level = %v, want high", result["confidence_level"])
+	}
+	if intent, ok := result["intent"].(string); !ok || intent != "advice" {
+		t.Fatalf("intent = %v, want advice", result["intent"])
+	}
+	missingInformation, ok := result["missing_information"].([]agentclient.MissingInformationItem)
+	if !ok || len(missingInformation) != 1 {
+		t.Fatalf("missing_information = %#v, want 1 item", result["missing_information"])
+	}
 	if got := len(messageRepo.records); got != 4 {
 		t.Fatalf("消息条数 = %d, want 4", got)
 	}
@@ -248,6 +293,37 @@ func TestAgentServiceAskUsesStoredHistoryAndPersistsMessages(t *testing.T) {
 	}
 	if _, err := os.Stat(*lastMessage.ContentPath); err != nil {
 		t.Fatalf("assistant payload 文件不存在: %v", err)
+	}
+	if client.request == nil {
+		t.Fatal("agent client 未收到请求")
+	}
+	classificationResult, ok := client.request.Context["classification_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("classification_result 类型错误: %#v", client.request.Context["classification_result"])
+	}
+	if modelType, _ := classificationResult["model_type"].(string); modelType != "xgboost" {
+		t.Fatalf("classification_result.model_type = %v, want xgboost", classificationResult["model_type"])
+	}
+	if labelDisplayName, _ := classificationResult["label_display_name"].(string); labelDisplayName != "白天低晚上高型" {
+		t.Fatalf("classification_result.label_display_name = %v, want 白天低晚上高型", classificationResult["label_display_name"])
+	}
+
+	forecastResult, ok := client.request.Context["forecast_summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("forecast_summary 类型错误: %#v", client.request.Context["forecast_summary"])
+	}
+	if schemaVersion, _ := forecastResult["schema_version"].(string); schemaVersion != "v1" {
+		t.Fatalf("forecast_summary.schema_version = %v, want v1", forecastResult["schema_version"])
+	}
+	if peakPeriod, _ := forecastResult["peak_period"].(string); peakPeriod == "" {
+		t.Fatalf("forecast_summary.peak_period = %v, want non-empty", forecastResult["peak_period"])
+	}
+	riskFlags, ok := forecastResult["risk_flags"].([]string)
+	if !ok {
+		t.Fatalf("forecast_summary.risk_flags 类型错误: %#v", forecastResult["risk_flags"])
+	}
+	if len(riskFlags) != 2 || riskFlags[0] != "evening_peak" || riskFlags[1] != "abnormal_rise" {
+		t.Fatalf("forecast_summary.risk_flags = %#v, want [evening_peak abnormal_rise]", riskFlags)
 	}
 }
 

@@ -1,0 +1,19 @@
+# TFT 使用的日级 profile 分类器配置
+# 仅用于在预测阶段生成 4 维 profile 概率特征
+
+data:
+  labels:
+    - "afternoon_peak"
+    - "all_day_low"
+    - "day_low_night_high"
+    - "morning_peak"
+
+model:
+  num_boost_round: 2000
+
+train:
+  output_dir: "../models_agent/checkpoints/classification/xgboost"
+
+predict:
+  checkpoint_path: "../models_agent/checkpoints/classification/xgboost/best_model.json"
+  batch_size: 128

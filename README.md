@@ -226,9 +226,8 @@ docker compose up -d db backend frontend live
 
 仓库当前默认使用：
 
-- 分类权重：`models_agent/checkpoints/classification/tcn/best_model.pt`
-- LSTM 权重：`models_agent/checkpoints/forecast/lstm/best_model.pt`
-- Transformer 权重：`models_agent/checkpoints/forecast/transformer_encoder_direct/best_model.pt`
+- 分类权重：`models_agent/checkpoints/classification/xgboost/best_model.json`
+- TFT 权重：`models_agent/checkpoints/forecast/tft/best.ckpt`
 
 ## 本地开发
 
@@ -262,10 +261,8 @@ cd models
 uv sync
 uv run python data/process/main.py run-all
 uv run python data/process/main.py export-live-sample
-uv run python classification/TCN/main.py train
-uv run python forecast/LSTM/main.py train
-uv run python forecast/transformer_encoder_direct/main.py train
-uv run python forecast/transformer_encdec_direct/main.py train
+uv run python classification/xgboost/main.py train
+uv run python forecast/tft/main.py train
 ```
 
 ### 实时演示模块

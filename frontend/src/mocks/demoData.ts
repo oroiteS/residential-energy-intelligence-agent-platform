@@ -70,24 +70,14 @@ function createForecastRecord(
   createdAt: string,
   overrides?: Partial<ForecastRecord>,
 ): ForecastRecord {
-  const summaryBase =
-    modelType === 'transformer'
-      ? {
-          predicted_avg_load_w: 812.4,
-          predicted_peak_load_w: 1658.2,
-          predicted_peak_ratio: 0.44,
-          predicted_valley_ratio: 0.2,
-          predicted_flat_ratio: 0.36,
-          risk_flags: ['evening_peak_risk', 'night_load_risk'] as const,
-        }
-      : {
-          predicted_avg_load_w: 768.9,
-          predicted_peak_load_w: 1492.6,
-          predicted_peak_ratio: 0.42,
-          predicted_valley_ratio: 0.22,
-          predicted_flat_ratio: 0.36,
-          risk_flags: ['evening_peak_risk'] as const,
-        }
+  const summaryBase = {
+    predicted_avg_load_w: 812.4,
+    predicted_peak_load_w: 1658.2,
+    predicted_peak_ratio: 0.44,
+    predicted_valley_ratio: 0.2,
+    predicted_flat_ratio: 0.36,
+    risk_flags: ['evening_peak', 'high_baseload'] as const,
+  }
 
   return {
     id,
@@ -100,13 +90,18 @@ function createForecastRecord(
       forecast_start: '2014-12-04T00:00:00+08:00',
       forecast_end: '2014-12-04T23:45:00+08:00',
       granularity: '15min',
+      schema_version: 'v1',
+      forecast_horizon: '1d',
       predicted_avg_load_w: summaryBase.predicted_avg_load_w,
       predicted_peak_load_w: summaryBase.predicted_peak_load_w,
+      predicted_total_kwh: Number(((summaryBase.predicted_avg_load_w * 24) / 1000).toFixed(2)),
+      peak_period: '2014-12-04T18:30:00+08:00/2014-12-04T21:30:00+08:00',
       forecast_peak_periods: ['2014-12-04T18:30:00+08:00/2014-12-04T21:30:00+08:00'],
       predicted_peak_ratio: summaryBase.predicted_peak_ratio,
       predicted_valley_ratio: summaryBase.predicted_valley_ratio,
       predicted_flat_ratio: summaryBase.predicted_flat_ratio,
       risk_flags: [...summaryBase.risk_flags],
+      confidence_hint: 'medium',
     },
     detail_path: `./outputs/forecasts/fc_${id}.json`,
     created_at: createdAt,
@@ -269,9 +264,11 @@ export const demoClassifications: Record<number, ClassificationResult> = {
   1: {
     id: 8,
     dataset_id: 1,
-    model_type: 'tcn',
+    model_type: 'xgboost',
+    schema_version: 'v1',
     predicted_label: 'day_low_night_high',
     confidence: 0.83,
+    label_display_name: '白天低晚上高型',
     probabilities: {
       day_high_night_low: 0.06,
       day_low_night_high: 0.83,
@@ -286,9 +283,11 @@ export const demoClassifications: Record<number, ClassificationResult> = {
   2: {
     id: 9,
     dataset_id: 2,
-    model_type: 'tcn',
+    model_type: 'xgboost',
+    schema_version: 'v1',
     predicted_label: 'day_high_night_low',
     confidence: 0.78,
+    label_display_name: '白天高晚上低型',
     probabilities: {
       day_high_night_low: 0.78,
       day_low_night_high: 0.11,
@@ -374,46 +373,61 @@ export const demoReports: Record<number, ReportRecord[]> = {
   ],
 }
 
-const forecast1 = createForecastRecord(3, 1, 'transformer', '2026-04-01T10:18:00+08:00', {
+const forecast1 = createForecastRecord(3, 1, 'tft', '2026-04-01T10:18:00+08:00', {
   ...createForecastWindow('2015-01-01'),
   summary: {
     ...createForecastWindow('2015-01-01'),
     granularity: '15min',
+    schema_version: 'v1',
+    forecast_horizon: '1d',
     predicted_avg_load_w: 812.4,
     predicted_peak_load_w: 1658.2,
+    predicted_total_kwh: 19.5,
+    peak_period: '2015-01-01T18:30:00+08:00/2015-01-01T21:30:00+08:00',
     forecast_peak_periods: ['2015-01-01T18:30:00+08:00/2015-01-01T21:30:00+08:00'],
     predicted_peak_ratio: 0.44,
     predicted_valley_ratio: 0.2,
     predicted_flat_ratio: 0.36,
-    risk_flags: ['evening_peak_risk', 'night_load_risk'],
+    risk_flags: ['evening_peak', 'high_baseload'],
+    confidence_hint: 'high',
   },
 })
-const forecast2 = createForecastRecord(4, 1, 'lstm', '2026-04-01T10:10:00+08:00', {
+const forecast2 = createForecastRecord(4, 1, 'tft', '2026-04-01T10:10:00+08:00', {
   ...createForecastWindow('2015-01-02'),
   summary: {
     ...createForecastWindow('2015-01-02'),
     granularity: '15min',
+    schema_version: 'v1',
+    forecast_horizon: '1d',
     predicted_avg_load_w: 768.9,
     predicted_peak_load_w: 1492.6,
+    predicted_total_kwh: 18.45,
+    peak_period: '2015-01-02T18:15:00+08:00/2015-01-02T21:15:00+08:00',
     forecast_peak_periods: ['2015-01-02T18:15:00+08:00/2015-01-02T21:15:00+08:00'],
     predicted_peak_ratio: 0.42,
     predicted_valley_ratio: 0.22,
     predicted_flat_ratio: 0.36,
-    risk_flags: ['evening_peak_risk'],
+    risk_flags: ['evening_peak'],
+    confidence_hint: 'medium',
   },
 })
-const forecast3 = createForecastRecord(5, 2, 'lstm', '2026-04-01T10:26:00+08:00', {
+const forecast3 = createForecastRecord(5, 2, 'tft', '2026-04-01T10:26:00+08:00', {
   ...createForecastWindow('2014-10-01'),
   summary: {
     ...createForecastWindow('2014-10-01'),
     granularity: '15min',
+    schema_version: 'v1',
+    forecast_horizon: '1d',
     predicted_avg_load_w: 641.2,
     predicted_peak_load_w: 1268.5,
+    predicted_total_kwh: 15.39,
+    peak_period: '2014-10-01T09:00:00+08:00/2014-10-01T11:00:00+08:00',
     forecast_peak_periods: ['2014-10-01T09:00:00+08:00/2014-10-01T11:00:00+08:00'],
     predicted_peak_ratio: 0.35,
     predicted_valley_ratio: 0.22,
     predicted_flat_ratio: 0.43,
-    risk_flags: ['morning_spike_risk'],
+    risk_flags: ['daytime_peak'],
+    confidence_hint: 'medium',
   },
 })
 
@@ -567,10 +581,8 @@ export function buildMockImportedForecast(
     1,
     Math.round((targetDayStart.getTime() - datasetDayStart.getTime()) / (24 * 60 * 60 * 1000)),
   )
-  const predictedAvgLoad =
-    modelType === 'transformer' ? 500 + dayOffset * 34 : 460 + dayOffset * 26
-  const predictedPeakLoad =
-    modelType === 'transformer' ? 860 + dayOffset * 84 : 780 + dayOffset * 72
+  const predictedAvgLoad = 500 + dayOffset * 34
+  const predictedPeakLoad = 860 + dayOffset * 84
   const predictedPeakRatio = Number((0.39 + dayOffset * 0.015).toFixed(2))
   const predictedValleyRatio = Number((0.21 + dayOffset * 0.005).toFixed(2))
   const predictedFlatRatio = Number(
@@ -583,15 +595,20 @@ export function buildMockImportedForecast(
       forecast_start: forecastStart,
       forecast_end: forecastEnd,
       granularity: '15min',
+      schema_version: 'v1',
+      forecast_horizon: '1d',
       predicted_avg_load_w: predictedAvgLoad,
       predicted_peak_load_w: predictedPeakLoad,
+      predicted_total_kwh: Number(((predictedAvgLoad * 24) / 1000).toFixed(2)),
+      peak_period: `${forecastStart.slice(0, 10)}T${dayOffset === 1 ? '18:15:00+08:00' : dayOffset === 2 ? '19:00:00+08:00' : '20:00:00+08:00'}/${forecastStart.slice(0, 10)}T${dayOffset === 1 ? '21:00:00+08:00' : dayOffset === 2 ? '21:45:00+08:00' : '22:30:00+08:00'}`,
       forecast_peak_periods: [
         `${forecastStart.slice(0, 10)}T${dayOffset === 1 ? '18:15:00+08:00' : dayOffset === 2 ? '19:00:00+08:00' : '20:00:00+08:00'}/${forecastStart.slice(0, 10)}T${dayOffset === 1 ? '21:00:00+08:00' : dayOffset === 2 ? '21:45:00+08:00' : '22:30:00+08:00'}`,
       ],
       predicted_peak_ratio: predictedPeakRatio,
       predicted_valley_ratio: predictedValleyRatio,
       predicted_flat_ratio: predictedFlatRatio,
-      risk_flags: dayOffset >= 3 ? ['evening_peak_risk', 'night_load_risk'] : ['evening_peak_risk'],
+      risk_flags: dayOffset >= 3 ? ['evening_peak', 'high_baseload'] : ['evening_peak'],
+      confidence_hint: dayOffset >= 3 ? 'medium' : 'high',
     },
     detail_path: `./outputs/forecasts/fc_${forecastId}.json`,
   })
@@ -646,7 +663,7 @@ export function buildMockAssistantExchange(
       {
         key: 'risk_flags',
         label: '预测风险标签',
-        value: datasetId === 1 ? ['evening_peak_risk', 'night_load_risk'] : ['morning_spike_risk'],
+        value: datasetId === 1 ? ['evening_peak', 'high_baseload'] : ['daytime_peak'],
       },
     ],
     actions:
@@ -656,6 +673,18 @@ export function buildMockAssistantExchange(
     degraded: datasetId === 1,
     error_reason: datasetId === 1 ? 'MOCK_MODE' : null,
     created_at: '2026-04-01T10:52:00+08:00',
+    intent: datasetId === 1 ? 'risk' : 'advice',
+    confidence_level: datasetId === 1 ? 'medium' : 'high',
+    missing_information:
+      datasetId === 1
+        ? [
+            {
+              key: 'comfort_priority',
+              question: '你更偏向节能优先，还是舒适度优先？',
+              reason: '晚间热水和持续负荷调整会影响舒适度，需要先确认偏好。',
+            },
+          ]
+        : [],
   }
 
   return {

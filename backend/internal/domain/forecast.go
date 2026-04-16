@@ -5,7 +5,7 @@ import "time"
 type ForecastResultRecord struct {
 	ID            uint64     `gorm:"column:id;primaryKey;autoIncrement"`
 	DatasetID     uint64     `gorm:"column:dataset_id;not null"`
-	ModelType     string     `gorm:"column:model_type;type:enum('lstm','transformer');not null"`
+	ModelType     string     `gorm:"column:model_type;type:varchar(32);not null"`
 	ForecastStart time.Time  `gorm:"column:forecast_start;type:datetime;not null"`
 	ForecastEnd   time.Time  `gorm:"column:forecast_end;type:datetime;not null"`
 	Granularity   string     `gorm:"column:granularity;type:enum('15min','hourly','daily');not null"`

@@ -34,7 +34,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/chat", s.handleChat)
 
 	fileServer := http.FileServer(http.Dir(s.staticDir))
-	s.mux.Handle("/", fileServer)
+	s.mux.Handle("/", s.withNoCache(fileServer))
 }
 
 func (s *Server) handleState(writer http.ResponseWriter, request *http.Request) {
@@ -108,6 +108,17 @@ func writeJSON(writer http.ResponseWriter, statusCode int, payload any) {
 
 func writeError(writer http.ResponseWriter, statusCode int, message string) {
 	writeJSON(writer, statusCode, map[string]string{"error": message})
+}
+
+func (s *Server) withNoCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet || request.Method == http.MethodHead {
+			writer.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+			writer.Header().Set("Pragma", "no-cache")
+			writer.Header().Set("Expires", "0")
+		}
+		next.ServeHTTP(writer, request)
+	})
 }
 
 func ResolvePath(baseDir string, relative string) string {

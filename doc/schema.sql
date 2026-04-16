@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS `analysis_results` (
 CREATE TABLE IF NOT EXISTS `classification_results` (
     `id`              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `dataset_id`      BIGINT UNSIGNED NOT NULL COMMENT '关联数据集',
-    `model_type`      ENUM('tcn')
+    `model_type`      ENUM('xgboost')
                       NOT NULL COMMENT '模型架构',
     `predicted_label` VARCHAR(32)     NOT NULL COMMENT '预测标签：day_high_night_low/day_low_night_high/all_day_high/all_day_low',
     `confidence`      DECIMAL(5,4)    DEFAULT NULL COMMENT '最高类别置信度',
@@ -158,13 +158,27 @@ CREATE TABLE IF NOT EXISTS `classification_results` (
   COMMENT='行为分类结果表';
 
 -- -----------------------------------------------------------
+-- classification_results 历史库升级说明
+-- 仅用于已经存在旧表且 model_type 仍为 tcn 的场景
+-- -----------------------------------------------------------
+-- ALTER TABLE `classification_results`
+-- MODIFY COLUMN `model_type` ENUM('tcn','xgboost') NOT NULL COMMENT '模型架构';
+--
+-- UPDATE `classification_results`
+-- SET `model_type` = 'xgboost'
+-- WHERE `model_type` = 'tcn';
+--
+-- ALTER TABLE `classification_results`
+-- MODIFY COLUMN `model_type` ENUM('xgboost') NOT NULL COMMENT '模型架构';
+
+-- -----------------------------------------------------------
 -- 5. forecast_results — 时序预测结果
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `forecast_results` (
     `id`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `dataset_id`     BIGINT UNSIGNED NOT NULL COMMENT '关联数据集',
-    `model_type`     ENUM('lstm','transformer')
-                     NOT NULL COMMENT '模型架构（当前启用 lstm，transformer 预留）',
+    `model_type`     VARCHAR(32)
+                     NOT NULL COMMENT '预测模型类型（API 对外统一为 tft）',
     `forecast_start` DATETIME        NOT NULL COMMENT '预测起始时间',
     `forecast_end`   DATETIME        NOT NULL COMMENT '预测结束时间',
     `granularity`    ENUM('15min','hourly','daily')

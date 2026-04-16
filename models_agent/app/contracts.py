@@ -139,23 +139,75 @@ class ForecastRequest:
     granularity: str
     unit: str
     series: list[TimeSeriesPoint]
+    profile_probability_days: list["ProfileProbabilityDay"]
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ForecastRequest":
         metadata = payload.get("metadata", {}) or {}
         try:
             return cls(
-                model_type=str(payload.get("model_type", "lstm")),
+                model_type=str(payload.get("model_type", "tft")),
                 dataset_id=int(payload["dataset_id"]),
                 forecast_start=str(payload["forecast_start"]),
                 forecast_end=str(payload["forecast_end"]),
                 granularity=str(payload.get("granularity", "15min")),
                 unit=str(metadata.get("unit", "w")),
                 series=_load_series(payload),
+                profile_probability_days=[
+                    ProfileProbabilityDay.from_dict(item)
+                    for item in (payload.get("profile_probability_days", []) or [])
+                ],
             )
         except KeyError as exc:
             raise ValidationError(f"请求缺少字段: {exc.args[0]}") from exc
 
+
+@dataclass(slots=True)
+class ProfileProbabilityDay:
+    date: str
+    probabilities: dict[str, float]
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ProfileProbabilityDay":
+        try:
+            date = str(payload["date"]).strip()
+        except KeyError as exc:
+            raise ValidationError(
+                "profile_probability_days 缺少字段: date"
+            ) from exc
+        if not date:
+            raise ValidationError("profile_probability_days.date 不能为空")
+        try:
+            datetime.fromisoformat(date)
+        except Exception as exc:
+            raise ValidationError(
+                "profile_probability_days.date 必须是合法日期"
+            ) from exc
+
+        raw_probabilities = payload.get("probabilities", {})
+        if not isinstance(raw_probabilities, dict) or not raw_probabilities:
+            raise ValidationError(
+                "profile_probability_days.probabilities 必须是非空对象"
+            )
+
+        normalized_probabilities: dict[str, float] = {}
+        for label, probability in raw_probabilities.items():
+            try:
+                normalized_probability = float(probability)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError(
+                    "profile_probability_days.probabilities 的值必须是数字"
+                ) from exc
+            if normalized_probability < 0.0 or normalized_probability > 1.0:
+                raise ValidationError(
+                    "profile_probability_days.probabilities 的值必须在 0 到 1 之间"
+                )
+            normalized_probabilities[str(label)] = normalized_probability
+
+        return cls(
+            date=date,
+            probabilities=normalized_probabilities,
+        )
 
 @dataclass(slots=True)
 class AgentHistoryItem:

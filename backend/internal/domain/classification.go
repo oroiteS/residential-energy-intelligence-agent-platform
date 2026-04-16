@@ -5,7 +5,7 @@ import "time"
 type ClassificationResultRecord struct {
 	ID             uint64     `gorm:"column:id;primaryKey;autoIncrement"`
 	DatasetID      uint64     `gorm:"column:dataset_id;not null"`
-	ModelType      string     `gorm:"column:model_type;type:enum('tcn');not null"`
+	ModelType      string     `gorm:"column:model_type;type:enum('xgboost');not null"`
 	PredictedLabel string     `gorm:"column:predicted_label;type:varchar(32);not null"`
 	Confidence     float64    `gorm:"column:confidence;type:decimal(5,4)"`
 	Probabilities  []byte     `gorm:"column:probabilities;type:json"`

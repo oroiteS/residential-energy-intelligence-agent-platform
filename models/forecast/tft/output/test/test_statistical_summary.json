@@ -1,0 +1,14 @@
+{
+  "house_count": 155,
+  "model_mae_mean": 185.67093972696065,
+  "baseline_mae_mean": 235.51654661553795,
+  "mae_improvement_mean": 49.84560688857727,
+  "mae_improvement_median": 32.551905720504294,
+  "difference_mean": -49.84560688857727,
+  "difference_std": 53.71673102979496,
+  "shapiro_pvalue": 4.496759297030014e-14,
+  "effect_size_dz": -0.9279344802447026,
+  "test_name": "wilcoxon_signed_rank",
+  "statistic": 220.0,
+  "pvalue": 1.161248614683511e-25
+}

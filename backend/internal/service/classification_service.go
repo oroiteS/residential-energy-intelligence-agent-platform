@@ -70,10 +70,10 @@ func (s *ClassificationService) Predict(ctx context.Context, datasetID uint64, i
 
 	modelType := strings.TrimSpace(strings.ToLower(input.ModelType))
 	if modelType == "" {
-		modelType = "tcn"
+		modelType = "xgboost"
 	}
-	if modelType != "tcn" {
-		return nil, apperror.Unprocessable("INVALID_REQUEST", "当前仅支持 tcn 分类模型", map[string]any{"model_type": input.ModelType})
+	if modelType != "xgboost" {
+		return nil, apperror.Unprocessable("INVALID_REQUEST", "当前仅支持 xgboost 分类模型", map[string]any{"model_type": input.ModelType})
 	}
 
 	dataset, appErr := getReadyDatasetRecord(ctx, s.datasetRepo, datasetID)
@@ -319,22 +319,24 @@ func classificationRecordDTO(record *domain.ClassificationResultRecord) map[stri
 		_ = json.Unmarshal(record.Probabilities, &probabilities)
 	}
 	return map[string]any{
-		"id":              record.ID,
-		"dataset_id":      record.DatasetID,
-		"model_type":      record.ModelType,
-		"predicted_label": record.PredictedLabel,
-		"confidence":      roundFloat(record.Confidence, 4),
-		"probabilities":   probabilities,
-		"explanation":     nullableString(record.Explanation),
-		"window_start":    record.WindowStart,
-		"window_end":      record.WindowEnd,
-		"created_at":      record.CreatedAt,
+		"id":                 record.ID,
+		"dataset_id":         record.DatasetID,
+		"schema_version":     "v1",
+		"model_type":         normalizedClassificationModelType(record.ModelType),
+		"predicted_label":    record.PredictedLabel,
+		"confidence":         roundFloat(record.Confidence, 4),
+		"label_display_name": classificationLabelText(record.PredictedLabel),
+		"probabilities":      probabilities,
+		"explanation":        nullableString(record.Explanation),
+		"window_start":       record.WindowStart,
+		"window_end":         record.WindowEnd,
+		"created_at":         record.CreatedAt,
 	}
 }
 
 func normalizedClassificationModelType(raw string) string {
 	if strings.TrimSpace(raw) == "" {
-		return "tcn"
+		return "xgboost"
 	}
 	return strings.ToLower(strings.TrimSpace(raw))
 }

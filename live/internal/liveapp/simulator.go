@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,9 +16,10 @@ import (
 )
 
 const (
-	dayStartSlot = 32
-	dayEndSlot   = 72
-	daySlots     = 96
+	dayStartSlot        = 32
+	dayEndSlot          = 72
+	daySlots            = 96
+	forecastHistoryDays = 7
 )
 
 type daySeries struct {
@@ -38,7 +40,8 @@ type Simulator struct {
 	running              bool
 	tickInterval         time.Duration
 	latestClassification DayClassification
-	activeForecast       DayForecast
+	todayForecast        DayForecast
+	nextDayForecast      DayForecast
 	subscribers          map[chan Snapshot]struct{}
 	serviceClient        *ServiceClient
 	chatHistory          []chatHistoryItem
@@ -56,10 +59,18 @@ func NewSimulator(csvPath string, tickInterval time.Duration, serviceClient *Ser
 	if len(days) == 0 {
 		return nil, errors.New("live 数据为空")
 	}
+	if len(days) < forecastHistoryDays*2 {
+		return nil, fmt.Errorf(
+			"live 数据至少需要 %d 天，当前仅有 %d 天，无法从第 8 天开始同时生成今日预测与次日预测",
+			forecastHistoryDays*2,
+			len(days),
+		)
+	}
 
 	simulator := &Simulator{
 		source:        source,
 		days:          days,
+		dayIndex:      forecastHistoryDays,
 		running:       true,
 		tickInterval:  tickInterval,
 		subscribers:   make(map[chan Snapshot]struct{}),
@@ -71,8 +82,16 @@ func NewSimulator(csvPath string, tickInterval time.Duration, serviceClient *Ser
 			},
 		},
 	}
-	simulator.latestClassification = simulator.refreshClassification((len(days) - 1 + len(days)) % len(days))
-	simulator.activeForecast = simulator.refreshForecast(0)
+	lastCompleteDayIndex := simulator.dayIndex - 1
+	simulator.latestClassification = simulator.refreshClassification(lastCompleteDayIndex)
+	simulator.todayForecast = simulator.refreshForecast(
+		simulator.dayIndex,
+		lastCompleteDayIndex,
+	)
+	simulator.nextDayForecast = simulator.refreshForecast(
+		(simulator.dayIndex+1)%len(days),
+		lastCompleteDayIndex,
+	)
 	return simulator, nil
 }
 
@@ -97,7 +116,8 @@ func (s *Simulator) Tick() Snapshot {
 			s.weekLoop++
 		}
 		s.slotIndex = 0
-		s.activeForecast = s.refreshForecast(s.dayIndex)
+		s.todayForecast = s.refreshForecast(s.dayIndex, currentDay)
+		s.nextDayForecast = s.refreshForecast((s.dayIndex+1)%len(s.days), currentDay)
 	} else {
 		s.slotIndex = currentSlot
 	}
@@ -168,10 +188,23 @@ func (s *Simulator) Answer(question string) ChatResponse {
 	}
 
 	result := ChatResponse{
-		Answer:      strings.TrimSpace(response.Answer),
-		CreatedAt:   time.Now().Format(time.RFC3339),
-		Degraded:    response.Degraded,
-		ErrorReason: strings.TrimSpace(response.ErrorReason),
+		Answer:          strings.TrimSpace(response.Answer),
+		CreatedAt:       time.Now().Format(time.RFC3339),
+		Actions:         append([]string(nil), response.Actions...),
+		Intent:          strings.TrimSpace(response.Intent),
+		ConfidenceLevel: strings.TrimSpace(response.ConfidenceLevel),
+		Degraded:        response.Degraded,
+		ErrorReason:     strings.TrimSpace(response.ErrorReason),
+	}
+	if len(response.MissingInformation) > 0 {
+		result.MissingInformation = make([]ChatMissingInformation, 0, len(response.MissingInformation))
+		for _, item := range response.MissingInformation {
+			result.MissingInformation = append(result.MissingInformation, ChatMissingInformation{
+				Key:      strings.TrimSpace(item.Key),
+				Question: strings.TrimSpace(item.Question),
+				Reason:   strings.TrimSpace(item.Reason),
+			})
+		}
 	}
 	if result.Answer == "" {
 		result.Answer = "智能体返回了空结果，当前无法给出有效回答。"
@@ -209,7 +242,9 @@ func (s *Simulator) snapshotLocked() Snapshot {
 		TodayPoints:          todayPoints,
 		Metrics:              buildMetrics(todayPoints),
 		LatestClassification: cloneClassification(s.latestClassification),
-		ActiveForecast:       cloneForecast(s.activeForecast),
+		TodayForecast:        cloneForecast(s.todayForecast),
+		NextDayForecast:      cloneForecast(s.nextDayForecast),
+		ActiveForecast:       cloneForecast(s.nextDayForecast),
 		WeekLoop:             s.weekLoop,
 	}
 }
@@ -240,7 +275,7 @@ func (s *Simulator) refreshClassification(dayIndex int) DayClassification {
 			DayMean:     roundFloat(series.DayMean, 2),
 			NightMean:   roundFloat(series.NightMean, 2),
 			FullMean:    roundFloat(series.FullMean, 2),
-			ModelType:   "tcn",
+			ModelType:   "xgboost",
 			Explanation: "模型服务未配置，无法生成最近完整日分类结果。",
 			Error:       "LIVE_MODEL_SERVICE_BASE_URL_MISSING",
 		}
@@ -253,7 +288,7 @@ func (s *Simulator) refreshClassification(dayIndex int) DayClassification {
 			DayMean:     roundFloat(series.DayMean, 2),
 			NightMean:   roundFloat(series.NightMean, 2),
 			FullMean:    roundFloat(series.FullMean, 2),
-			ModelType:   "tcn",
+			ModelType:   "xgboost",
 			Explanation: "分类模型调用失败，当前未刷新出新的分类结果。",
 			Error:       err.Error(),
 		}
@@ -265,7 +300,7 @@ func (s *Simulator) refreshClassification(dayIndex int) DayClassification {
 		DayMean:   roundFloat(series.DayMean, 2),
 		NightMean: roundFloat(series.NightMean, 2),
 		FullMean:  roundFloat(series.FullMean, 2),
-		ModelType: firstNonEmpty(strings.TrimSpace(response.ModelType), "tcn"),
+		ModelType: firstNonEmpty(strings.TrimSpace(response.ModelType), "xgboost"),
 		Explanation: buildClassificationExplanation(
 			strings.TrimSpace(response.PredictedLabel),
 			series.DayMean,
@@ -275,20 +310,20 @@ func (s *Simulator) refreshClassification(dayIndex int) DayClassification {
 	}
 }
 
-func (s *Simulator) refreshForecast(targetDayIndex int) DayForecast {
+func (s *Simulator) refreshForecast(targetDayIndex int, historyEndDayIndex int) DayForecast {
 	targetDay := s.days[targetDayIndex]
-	historyPoints := s.buildForecastHistory(targetDayIndex)
+	historyPoints := s.buildForecastHistory(historyEndDayIndex)
 
 	if s.serviceClient == nil {
 		return DayForecast{
 			Date:            targetDay.Date,
 			Explanation:     "模型服务未配置，无法生成下一日预测。",
-			HistoryDaysUsed: 3,
-			ModelType:       "transformer",
+			HistoryDaysUsed: forecastHistoryDays,
+			ModelType:       "tft",
 			Error:           "LIVE_MODEL_SERVICE_BASE_URL_MISSING",
 		}
 	}
-	if len(historyPoints) != daySlots*3 {
+	if len(historyPoints) != daySlots*forecastHistoryDays {
 		return DayForecast{
 			Date:            targetDay.Date,
 			Explanation:     "历史窗口不足，无法为下一日生成预测。",
@@ -303,7 +338,7 @@ func (s *Simulator) refreshForecast(targetDayIndex int) DayForecast {
 		return DayForecast{
 			Date:            targetDay.Date,
 			Explanation:     "预测模型调用失败，当前未刷新出新的预测结果。",
-			HistoryDaysUsed: 3,
+			HistoryDaysUsed: forecastHistoryDays,
 			ModelType:       s.serviceClient.forecastModelType,
 			Error:           err.Error(),
 		}
@@ -312,7 +347,7 @@ func (s *Simulator) refreshForecast(targetDayIndex int) DayForecast {
 		return DayForecast{
 			Date:            targetDay.Date,
 			Explanation:     "预测模型返回的数据点数量不正确。",
-			HistoryDaysUsed: 3,
+			HistoryDaysUsed: forecastHistoryDays,
 			ModelType:       firstNonEmpty(strings.TrimSpace(response.ModelType), s.serviceClient.forecastModelType),
 			Error:           fmt.Sprintf("expected=%d actual=%d", daySlots, len(response.Predictions)),
 		}
@@ -359,25 +394,30 @@ func (s *Simulator) refreshForecast(targetDayIndex int) DayForecast {
 	riskFlags := buildRiskFlags(avgLoad, peak, safeDivide(peakEnergy, total), safeDivide(valleyEnergy, total))
 
 	return DayForecast{
-		Date:            targetDay.Date,
-		Points:          points,
-		AvgLoadW:        roundFloat(avgLoad, 2),
-		PeakLoadW:       roundFloat(peak, 2),
-		PeakPeriods:     peakPeriods,
-		PeakRatio:       roundFloat(safeDivide(peakEnergy, total), 4),
-		ValleyRatio:     roundFloat(safeDivide(valleyEnergy, total), 4),
-		FlatRatio:       roundFloat(safeDivide(flatEnergy, total), 4),
-		RiskFlags:       riskFlags,
-		Explanation:     fmt.Sprintf("基于最近 3 个完整虚拟日，通过 %s 模型生成下一日预测。", firstNonEmpty(strings.TrimSpace(response.ModelType), s.serviceClient.forecastModelType)),
-		HistoryDaysUsed: 3,
+		Date:        targetDay.Date,
+		Points:      points,
+		AvgLoadW:    roundFloat(avgLoad, 2),
+		PeakLoadW:   roundFloat(peak, 2),
+		PeakPeriods: peakPeriods,
+		PeakRatio:   roundFloat(safeDivide(peakEnergy, total), 4),
+		ValleyRatio: roundFloat(safeDivide(valleyEnergy, total), 4),
+		FlatRatio:   roundFloat(safeDivide(flatEnergy, total), 4),
+		RiskFlags:   riskFlags,
+		Explanation: fmt.Sprintf(
+			"基于最近 %d 个完整虚拟日，通过 %s 模型生成 %s 的逐点预测。",
+			forecastHistoryDays,
+			firstNonEmpty(strings.TrimSpace(response.ModelType), s.serviceClient.forecastModelType),
+			targetDay.Date,
+		),
+		HistoryDaysUsed: forecastHistoryDays,
 		ModelType:       firstNonEmpty(strings.TrimSpace(response.ModelType), s.serviceClient.forecastModelType),
 	}
 }
 
-func (s *Simulator) buildForecastHistory(targetDayIndex int) []DataPoint {
-	historyPoints := make([]DataPoint, 0, daySlots*3)
-	for offset := 3; offset >= 1; offset-- {
-		index := (targetDayIndex - offset + len(s.days)) % len(s.days)
+func (s *Simulator) buildForecastHistory(historyEndDayIndex int) []DataPoint {
+	historyPoints := make([]DataPoint, 0, daySlots*forecastHistoryDays)
+	for offset := forecastHistoryDays - 1; offset >= 0; offset-- {
+		index := (historyEndDayIndex - offset + len(s.days)) % len(s.days)
 		historyPoints = append(historyPoints, clonePoints(s.days[index].Points)...)
 	}
 	return historyPoints
@@ -385,7 +425,7 @@ func (s *Simulator) buildForecastHistory(targetDayIndex int) []DataPoint {
 
 func (s *Simulator) buildAgentContext(snapshot Snapshot) map[string]any {
 	classification := snapshot.LatestClassification
-	forecast := snapshot.ActiveForecast
+	forecast := snapshot.NextDayForecast
 
 	return map[string]any{
 		"dataset": map[string]any{
@@ -398,6 +438,8 @@ func (s *Simulator) buildAgentContext(snapshot Snapshot) map[string]any {
 			"loop_index":   snapshot.WeekLoop,
 		},
 		"analysis_summary": map[string]any{
+			"daily_avg_kwh":        roundFloat(safeDivide(snapshot.Metrics.TodayCumulativeKWH*float64(daySlots), float64(snapshot.Metrics.ObservedSlots)), 4),
+			"max_load_w":           roundFloat(snapshot.Metrics.TodayPeakLoadW, 2),
 			"current_power_w":      roundFloat(snapshot.Metrics.CurrentPowerW, 2),
 			"today_cumulative_kwh": roundFloat(snapshot.Metrics.TodayCumulativeKWH, 4),
 			"today_peak_load_w":    roundFloat(snapshot.Metrics.TodayPeakLoadW, 2),
@@ -409,29 +451,35 @@ func (s *Simulator) buildAgentContext(snapshot Snapshot) map[string]any {
 		},
 		"recent_history_summary": buildLiveRecentHistorySummary(snapshot.TodayPoints),
 		"classification_result": map[string]any{
-			"date":        classification.Date,
-			"label":       classification.Label,
-			"label_name":  localizeLabel(classification.Label),
-			"model_type":  classification.ModelType,
-			"day_mean":    classification.DayMean,
-			"night_mean":  classification.NightMean,
-			"full_mean":   classification.FullMean,
-			"explanation": classification.Explanation,
-			"error":       classification.Error,
+			"schema_version":     "v1",
+			"date":               classification.Date,
+			"predicted_label":    classification.Label,
+			"label_display_name": localizeLabel(classification.Label),
+			"model_type":         classification.ModelType,
+			"day_mean":           classification.DayMean,
+			"night_mean":         classification.NightMean,
+			"full_mean":          classification.FullMean,
+			"explanation":        classification.Explanation,
+			"error":              classification.Error,
 		},
 		"forecast_summary": map[string]any{
-			"date":              forecast.Date,
-			"model_type":        forecast.ModelType,
-			"avg_load_w":        forecast.AvgLoadW,
-			"peak_load_w":       forecast.PeakLoadW,
-			"peak_periods":      append([]string(nil), forecast.PeakPeriods...),
-			"peak_ratio":        forecast.PeakRatio,
-			"valley_ratio":      forecast.ValleyRatio,
-			"flat_ratio":        forecast.FlatRatio,
-			"risk_flags":        append([]string(nil), forecast.RiskFlags...),
-			"history_days_used": forecast.HistoryDaysUsed,
-			"explanation":       forecast.Explanation,
-			"error":             forecast.Error,
+			"schema_version":        "v1",
+			"date":                  forecast.Date,
+			"model_type":            forecast.ModelType,
+			"forecast_horizon":      "1d",
+			"predicted_avg_load_w":  forecast.AvgLoadW,
+			"predicted_peak_load_w": forecast.PeakLoadW,
+			"predicted_total_kwh":   roundFloat(forecast.AvgLoadW*24/1000, 4),
+			"peak_period":           buildLivePeakPeriod(forecast.PeakPeriods),
+			"peak_periods":          append([]string(nil), forecast.PeakPeriods...),
+			"peak_ratio":            forecast.PeakRatio,
+			"valley_ratio":          forecast.ValleyRatio,
+			"flat_ratio":            forecast.FlatRatio,
+			"risk_flags":            append([]string(nil), forecast.RiskFlags...),
+			"confidence_hint":       buildLiveForecastConfidenceHint(forecast),
+			"history_days_used":     forecast.HistoryDaysUsed,
+			"explanation":           forecast.Explanation,
+			"error":                 forecast.Error,
 		},
 		"rule_advices": buildLiveRuleAdvices(classification, forecast),
 	}
@@ -470,39 +518,57 @@ func buildLiveRuleAdvices(classification DayClassification, forecast DayForecast
 	items := make([]map[string]any, 0, 4)
 
 	switch classification.Label {
-	case "day_high_night_low":
+	case "daytime_active":
 		items = append(items, map[string]any{
-			"title":   "白天负荷偏高",
-			"content": "适合优先检查白天持续运行设备，避免工作时段叠加高功率电器。",
+			"key":      "daytime_active_shift",
+			"summary":  "白天活跃型",
+			"action":   "优先检查白天持续运行设备，避免工作时段叠加高功率电器。",
+			"reason":   "最近完整日分类显示白天时段用电活跃度明显更高。",
+			"category": "classification",
 		})
-	case "day_low_night_high":
+	case "daytime_peak_strong":
 		items = append(items, map[string]any{
-			"title":   "夜间负荷偏高",
-			"content": "建议重点核查夜间待机设备或持续运行电器，降低夜间基荷。",
+			"key":      "daytime_peak_strong_reduce",
+			"summary":  "白天尖峰明显型",
+			"action":   "避免在白天高峰时段叠加多个大功率任务，优先错峰执行。",
+			"reason":   "最近完整日分类显示白天存在更明显的峰值冲击。",
+			"category": "classification",
 		})
-	case "all_day_high":
+	case "night_dominant":
 		items = append(items, map[string]any{
-			"title":   "全天负荷偏高",
-			"content": "全天负荷都较高，应优先排查长时运行设备与空调、热水等大负荷来源。",
+			"key":      "night_dominant_reduce",
+			"summary":  "夜间主导型",
+			"action":   "重点核查夜间待机设备或持续运行电器，优先降低夜间基荷。",
+			"reason":   "最近完整日分类显示夜间时段负荷占比更高。",
+			"category": "classification",
 		})
-	case "all_day_low":
+	case "flat_stable":
 		items = append(items, map[string]any{
-			"title":   "全天负荷平稳",
-			"content": "当前整体负荷不高，可继续维持现有用电节奏。",
+			"key":      "flat_stable_keep",
+			"summary":  "平稳基线型",
+			"action":   "当前整体负荷不高，可继续维持现有用电节奏。",
+			"reason":   "最近完整日分类显示全天负荷较平稳，基线波动有限。",
+			"category": "classification",
 		})
 	}
 
 	for _, flag := range forecast.RiskFlags {
 		items = append(items, map[string]any{
-			"title":   "预测风险提示",
-			"content": flag,
+			"key":      fmt.Sprintf("forecast_%s", flag),
+			"summary":  "预测风险提示",
+			"action":   buildRiskAction(flag),
+			"reason":   localizeRiskFlag(flag),
+			"category": "forecast",
 		})
 	}
 
 	if len(items) == 0 {
 		items = append(items, map[string]any{
-			"title":   "暂无建议",
-			"content": "当前没有额外规则建议。",
+			"key":      "no_extra_advice",
+			"summary":  "暂无建议",
+			"action":   "当前没有额外规则建议，可继续观察后续负荷变化。",
+			"reason":   "分类与预测结果均未出现明显异常信号。",
+			"category": "general",
 		})
 	}
 	return items
@@ -585,9 +651,10 @@ func loadWeekData(csvPath string) (SourceInfo, []daySeries, error) {
 	}
 
 	source := SourceInfo{
-		HouseID: houseID,
-		Dataset: dataset,
-		Days:    len(days),
+		HouseID:  houseID,
+		Dataset:  dataset,
+		DataFile: filepath.Base(csvPath),
+		Days:     len(days),
 	}
 	return source, days, nil
 }
@@ -652,14 +719,14 @@ func computeMeans(points []DataPoint) (float64, float64, float64) {
 
 func buildClassificationExplanation(label string, dayMean float64, nightMean float64, fullMean float64) string {
 	switch label {
-	case "day_high_night_low":
-		return fmt.Sprintf("白天均值 %.2fW 明显高于夜间均值 %.2fW，属于白天活跃型。", dayMean, nightMean)
-	case "day_low_night_high":
-		return fmt.Sprintf("夜间均值 %.2fW 明显高于白天均值 %.2fW，存在夜间持续负荷特征。", nightMean, dayMean)
-	case "all_day_high":
-		return fmt.Sprintf("白天与夜间均处于高负荷区间，全天均值 %.2fW 偏高。", fullMean)
-	case "all_day_low":
-		return fmt.Sprintf("白天与夜间均处于低负荷区间，全天均值 %.2fW 较低。", fullMean)
+	case "daytime_active":
+		return fmt.Sprintf("白天均值 %.2fW 高于夜间均值 %.2fW，整体更接近白天活跃型。", dayMean, nightMean)
+	case "daytime_peak_strong":
+		return fmt.Sprintf("白天均值 %.2fW 与全天均值 %.2fW 对比显示白天峰值更突出，属于白天尖峰明显型。", dayMean, fullMean)
+	case "night_dominant":
+		return fmt.Sprintf("夜间均值 %.2fW 高于白天均值 %.2fW，存在明显夜间主导特征。", nightMean, dayMean)
+	case "flat_stable":
+		return fmt.Sprintf("全天均值 %.2fW，白天与夜间差异有限，整体更接近平稳基线型。", fullMean)
 	default:
 		return fmt.Sprintf("模型返回的分类标签为 %s，全天均值 %.2fW。", label, fullMean)
 	}
@@ -698,21 +765,72 @@ func buildMetrics(points []DataPoint) LiveMetrics {
 func buildRiskFlags(avgLoad float64, peakLoad float64, peakRatio float64, valleyRatio float64) []string {
 	flags := make([]string, 0, 4)
 	if peakRatio >= 0.42 {
-		flags = append(flags, "晚高峰占比偏高")
+		flags = append(flags, "evening_peak")
 	}
 	if valleyRatio <= 0.16 {
-		flags = append(flags, "夜间低谷利用不足")
+		flags = append(flags, "peak_overlap_risk")
 	}
 	if peakLoad >= avgLoad*1.85 {
-		flags = append(flags, "存在明显尖峰冲击")
+		flags = append(flags, "abnormal_rise")
 	}
 	if avgLoad >= 900 {
-		flags = append(flags, "全天基荷偏高")
-	}
-	if len(flags) == 0 {
-		flags = append(flags, "整体负荷节奏平稳")
+		flags = append(flags, "high_baseload")
 	}
 	return flags
+}
+
+func buildLivePeakPeriod(periods []string) string {
+	if len(periods) == 0 {
+		return ""
+	}
+	if len(periods) == 1 {
+		return periods[0]
+	}
+	return periods[0] + " - " + periods[len(periods)-1]
+}
+
+func buildLiveForecastConfidenceHint(forecast DayForecast) string {
+	if strings.TrimSpace(forecast.Error) != "" {
+		return "low"
+	}
+	if len(forecast.Points) == daySlots && len(forecast.RiskFlags) > 0 {
+		return "medium"
+	}
+	return "low"
+}
+
+func localizeRiskFlag(flag string) string {
+	switch flag {
+	case "evening_peak":
+		return "晚高峰风险"
+	case "daytime_peak":
+		return "白天高峰风险"
+	case "high_baseload":
+		return "基线负荷偏高"
+	case "abnormal_rise":
+		return "异常抬升风险"
+	case "peak_overlap_risk":
+		return "峰时叠加风险"
+	default:
+		return flag
+	}
+}
+
+func buildRiskAction(flag string) string {
+	switch flag {
+	case "evening_peak":
+		return "尽量避开傍晚集中开启洗衣、热水或充电类负荷。"
+	case "daytime_peak":
+		return "将可延后任务错开到白天非高峰窗口执行。"
+	case "high_baseload":
+		return "复查长时运行设备，优先压低持续性基荷。"
+	case "abnormal_rise":
+		return "关注可能的短时尖峰负荷，避免多个大功率设备同时启动。"
+	case "peak_overlap_risk":
+		return "减少峰时段负荷叠加，优先拆分连续高耗能任务。"
+	default:
+		return "结合预测结果继续观察负荷变化并适时调整。"
+	}
 }
 
 func isPeakSlot(slot int) bool {
@@ -752,14 +870,14 @@ func cloneForecast(value DayForecast) DayForecast {
 
 func localizeLabel(label string) string {
 	switch label {
-	case "day_high_night_low":
-		return "白天高晚上低型"
-	case "day_low_night_high":
-		return "白天低晚上高型"
-	case "all_day_high":
-		return "全天高负载型"
-	case "all_day_low":
-		return "全天低负载型"
+	case "daytime_active":
+		return "白天活跃型"
+	case "daytime_peak_strong":
+		return "白天尖峰明显型"
+	case "flat_stable":
+		return "平稳基线型"
+	case "night_dominant":
+		return "夜间主导型"
 	default:
 		return label
 	}

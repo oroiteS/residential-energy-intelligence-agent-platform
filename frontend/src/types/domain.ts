@@ -1,5 +1,6 @@
 export type DatasetStatus = 'uploaded' | 'processing' | 'ready' | 'error'
-export type ForecastModelType = 'lstm' | 'transformer'
+export type ForecastModelType = 'tft'
+export type ClassificationModelType = 'xgboost'
 export type PredictedLabel =
   | 'day_high_night_low'
   | 'day_low_night_high'
@@ -13,7 +14,20 @@ export type RiskFlag =
   | 'night_load_risk'
   | 'peak_usage_risk'
   | 'morning_spike_risk'
+  | 'evening_peak'
+  | 'daytime_peak'
+  | 'high_baseload'
+  | 'abnormal_rise'
+  | 'peak_overlap_risk'
 export type ChatRole = 'user' | 'assistant'
+export type AgentIntent =
+  | 'overview'
+  | 'classification'
+  | 'forecast'
+  | 'advice'
+  | 'risk'
+  | 'follow_up'
+export type AgentConfidenceLevel = 'high' | 'medium' | 'low'
 
 export type PeakValleyConfig = {
   peak: string[]
@@ -156,11 +170,15 @@ export type ClassificationProbabilities = Record<PredictedLabel, number>
 export type ClassificationResult = {
   id: number
   dataset_id: number
-  model_type: 'tcn'
+  model_type: ClassificationModelType
+  schema_version?: 'v1'
   predicted_label: PredictedLabel
   confidence: number
+  label_display_name?: string
   probabilities: ClassificationProbabilities
-  explanation: string
+  explanation?: string
+  sample_id?: string
+  runtime_library?: string
   window_start: string | null
   window_end: string | null
   created_at: string
@@ -170,13 +188,18 @@ export type ForecastSummary = {
   forecast_start: string
   forecast_end: string
   granularity: string
+  schema_version?: 'v1'
+  forecast_horizon?: '1d'
   predicted_avg_load_w: number
   predicted_peak_load_w: number
-  forecast_peak_periods: string[]
-  predicted_peak_ratio: number
-  predicted_valley_ratio: number
-  predicted_flat_ratio: number
+  predicted_total_kwh?: number
+  peak_period?: string
+  forecast_peak_periods?: string[]
+  predicted_peak_ratio?: number
+  predicted_valley_ratio?: number
+  predicted_flat_ratio?: number
   risk_flags: RiskFlag[]
+  confidence_hint?: AgentConfidenceLevel
 }
 
 export type ForecastRecord = {
@@ -259,17 +282,26 @@ export type ChatMessage = {
 export type Citation = {
   key: string
   label: string
-  value: string | number | string[]
+  value: string | number | boolean | Array<string | number>
+}
+
+export type AssistantMissingInformation = {
+  key: string
+  question: string
+  reason: string
 }
 
 export type AssistantAnswer = {
-  session_id: number
+  session_id?: number
   answer: string
   citations: Citation[]
   actions: string[]
   degraded: boolean
   error_reason: string | null
-  created_at: string
+  created_at?: string
+  intent?: AgentIntent
+  confidence_level?: AgentConfidenceLevel
+  missing_information?: AssistantMissingInformation[]
 }
 
 export type ImportDatasetInput = {

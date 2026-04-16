@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 from app.config import Settings
@@ -13,7 +17,6 @@ from app.inference.classification import (
     LABELS,
     SEQUENCE_LENGTH,
     get_checkpoint_path,
-    predict_single_sample,
 )
 
 
@@ -22,6 +25,11 @@ class ClassificationService:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.worker_script_path = (
+            Path(__file__).resolve().parents[1]
+            / "inference"
+            / "classification_worker.py"
+        )
 
     def health(self) -> dict[str, Any]:
         checkpoint_path = get_checkpoint_path(self.settings.classification_config_path)
@@ -36,12 +44,7 @@ class ClassificationService:
     def model_info(self) -> dict[str, Any]:
         return {
             "service_version": "v1",
-            "supported_models": [
-                "xgboost",
-                "lstm",
-                "transformer_encoder_direct",
-                "transformer_encdec_direct",
-            ],
+            "supported_models": ["xgboost", "tft"],
             "classification": {
                 "supported_models": ["xgboost"],
                 "labels": LABELS,
@@ -73,11 +76,7 @@ class ClassificationService:
                 },
             },
             "forecasting": {
-                "supported_models": [
-                    "lstm",
-                    "transformer_encoder_direct",
-                    "transformer_encdec_direct",
-                ],
+                "supported_models": ["tft"],
                 "request_mode": "time_range",
                 "supported_granularities": ["15min"],
                 "summary_schema": "ForecastSummary",
@@ -85,39 +84,82 @@ class ClassificationService:
                 "input_spec": {
                     "granularity": "15min",
                     "unit": "w",
-                    "history_window_by_model": {
-                        "lstm": {
-                            "unit": "day",
-                            "value": 7,
-                        },
-                        "transformer_encoder_direct": {
-                            "unit": "day",
-                            "value": 7,
-                        },
-                        "transformer_encdec_direct": {
-                            "unit": "day",
-                            "value": 7,
-                        },
+                    "history_window": {
+                        "unit": "day",
+                        "value": 7,
                     },
-                    "min_history_length_by_model": {
-                        "lstm": 672,
-                        "transformer_encoder_direct": 672,
-                        "transformer_encdec_direct": 672,
-                    },
+                    "min_history_length": 672,
                     "target_length": 96,
-                    "feature_names": [
+                    "raw_feature_names": [
+                        "timestamp",
+                        "aggregate",
+                        "active_appliance_count",
+                        "burst_event_count",
+                    ],
+                    "derived_feature_names": [
                         "aggregate",
                         "slot_sin",
                         "slot_cos",
                         "weekday_sin",
                         "weekday_cos",
-                        "active_appliance_count",
-                        "burst_event_count",
+                        "profile_prob_afternoon_peak",
+                        "profile_prob_all_day_low",
+                        "profile_prob_day_low_night_high",
+                        "profile_prob_morning_peak",
                     ],
                     "temporal_features_from_timestamp": True,
+                    "profile_prior_source": "xgboost_day_profile_classifier",
                 },
             },
         }
+
+    def _predict_via_worker(self, sample: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            "sample": sample,
+            "config_path": str(self.settings.classification_config_path),
+        }
+        try:
+            completed = subprocess.run(
+                [sys.executable, str(self.worker_script_path)],
+                input=json.dumps(payload, ensure_ascii=False),
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ServiceUnavailableError(
+                "CLASSIFICATION_TIMEOUT",
+                "分类推理子进程执行超时",
+            ) from exc
+
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip()
+            raise ServiceUnavailableError(
+                "CLASSIFICATION_FAILED",
+                f"分类推理失败: {stderr or '分类子进程异常退出'}",
+            )
+
+        stdout = completed.stdout.strip()
+        if not stdout:
+            raise ServiceUnavailableError(
+                "CLASSIFICATION_FAILED",
+                "分类推理失败: 分类子进程未返回结果",
+            )
+
+        try:
+            result = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise ServiceUnavailableError(
+                "CLASSIFICATION_FAILED",
+                "分类推理失败: 分类子进程返回了非法 JSON",
+            ) from exc
+        if not isinstance(result, dict):
+            raise ServiceUnavailableError(
+                "CLASSIFICATION_FAILED",
+                "分类推理失败: 分类子进程返回格式错误",
+            )
+        return result
 
     def predict(self, request: PredictRequest) -> dict[str, Any]:
         if request.model_type != "xgboost":
@@ -127,17 +169,18 @@ class ClassificationService:
             raise ValidationError("分类输入序列长度必须为 96")
 
         try:
-            result = predict_single_sample(
+            result = self._predict_via_worker(
                 sample={
                     "sample_id": f"{request.dataset_id}_{request.window.start[:10]}",
                     "house_id": str(request.dataset_id),
                     "date": request.window.start[:10],
                     "aggregate": [point.aggregate for point in request.series],
-                },
-                config_path=self.settings.classification_config_path,
+                }
             )
         except FileNotFoundError as exc:
             raise ServiceUnavailableError("MODEL_NOT_LOADED", "分类模型权重不存在") from exc
+        except ServiceUnavailableError:
+            raise
         except Exception as exc:
             raise ServiceUnavailableError("CLASSIFICATION_FAILED", f"分类推理失败: {exc}") from exc
 

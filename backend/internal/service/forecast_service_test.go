@@ -44,16 +44,28 @@ func TestExpected15MinutePointsForSingleDay(t *testing.T) {
 	}
 }
 
-func TestNormalizeForecastRequestSupportsTransformer(t *testing.T) {
-	modelType, granularity, appErr := normalizeForecastRequest("transformer", "15min")
+func TestNormalizeForecastRequestSupportsTFT(t *testing.T) {
+	modelType, granularity, appErr := normalizeForecastRequest("tft", "15min")
 	if appErr != nil {
 		t.Fatalf("normalizeForecastRequest() returned unexpected error: %v", appErr)
 	}
-	if modelType != "transformer" {
-		t.Fatalf("modelType = %s, want transformer", modelType)
+	if modelType != "tft" {
+		t.Fatalf("modelType = %s, want tft", modelType)
 	}
 	if granularity != "15min" {
 		t.Fatalf("granularity = %s, want 15min", granularity)
+	}
+}
+
+func TestNormalizeForecastRequestMapsLegacyModelsToTFT(t *testing.T) {
+	for _, legacyModel := range []string{"", "lstm", "transformer", "transformer_encoder_direct"} {
+		modelType, _, appErr := normalizeForecastRequest(legacyModel, "15min")
+		if appErr != nil {
+			t.Fatalf("normalizeForecastRequest(%q) returned unexpected error: %v", legacyModel, appErr)
+		}
+		if modelType != "tft" {
+			t.Fatalf("normalizeForecastRequest(%q) modelType = %s, want tft", legacyModel, modelType)
+		}
 	}
 }
 

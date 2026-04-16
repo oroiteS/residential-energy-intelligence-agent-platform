@@ -12,9 +12,10 @@ type DataPoint struct {
 }
 
 type SourceInfo struct {
-	HouseID string `json:"houseId"`
-	Dataset string `json:"dataset"`
-	Days    int    `json:"days"`
+	HouseID  string `json:"houseId"`
+	Dataset  string `json:"dataset"`
+	DataFile string `json:"dataFile"`
+	Days     int    `json:"days"`
 }
 
 type LiveMetrics struct {
@@ -70,6 +71,8 @@ type Snapshot struct {
 	TodayPoints          []DataPoint       `json:"todayPoints"`
 	Metrics              LiveMetrics       `json:"metrics"`
 	LatestClassification DayClassification `json:"latestClassification"`
+	TodayForecast        DayForecast       `json:"todayForecast"`
+	NextDayForecast      DayForecast       `json:"nextDayForecast"`
 	ActiveForecast       DayForecast       `json:"activeForecast"`
 	WeekLoop             int               `json:"weekLoop"`
 }
@@ -78,9 +81,19 @@ type ChatRequest struct {
 	Question string `json:"question"`
 }
 
+type ChatMissingInformation struct {
+	Key      string `json:"key"`
+	Question string `json:"question"`
+	Reason   string `json:"reason"`
+}
+
 type ChatResponse struct {
-	Answer      string `json:"answer"`
-	CreatedAt   string `json:"createdAt"`
-	Degraded    bool   `json:"degraded"`
-	ErrorReason string `json:"errorReason,omitempty"`
+	Answer             string                   `json:"answer"`
+	CreatedAt          string                   `json:"createdAt"`
+	Actions            []string                 `json:"actions,omitempty"`
+	Intent             string                   `json:"intent,omitempty"`
+	ConfidenceLevel    string                   `json:"confidenceLevel,omitempty"`
+	MissingInformation []ChatMissingInformation `json:"missingInformation,omitempty"`
+	Degraded           bool                     `json:"degraded"`
+	ErrorReason        string                   `json:"errorReason,omitempty"`
 }

@@ -134,6 +134,7 @@ func (s *AgentService) Ask(ctx context.Context, input AgentAskInput) (map[string
 	}
 
 	now := time.Now()
+	fallbackIntent := inferAgentIntent(input.Question)
 	clientResponse, err := s.askAgent(ctx, input, contextPayload)
 	if err != nil {
 		s.logWarn("智能体调用失败，已回退本地降级回答", zap.Error(err), zap.Uint64("dataset_id", input.DatasetID))
@@ -146,15 +147,7 @@ func (s *AgentService) Ask(ctx context.Context, input AgentAskInput) (map[string
 		return fallback, nil
 	}
 
-	result := map[string]any{
-		"session_id":   input.SessionID,
-		"answer":       strings.TrimSpace(clientResponse.Answer),
-		"citations":    clientResponse.Citations,
-		"actions":      clientResponse.Actions,
-		"degraded":     clientResponse.Degraded,
-		"error_reason": clientResponse.ErrorReason,
-		"created_at":   now,
-	}
+	result := buildAgentResponsePayload(input.SessionID, clientResponse, fallbackIntent, now)
 	if result["answer"] == "" {
 		fallback := buildLocalAgentFallback(input.SessionID, input.Question, contextPayload, "EMPTY_AGENT_ANSWER", &now)
 		if persistErr := s.createAssistantMessage(ctx, input.SessionID, fallback); persistErr != nil {
@@ -382,7 +375,7 @@ func (s *AgentService) loadLatestClassification(ctx context.Context, datasetID u
 	if s.classificationRepo == nil {
 		return map[string]any{}
 	}
-	record, err := s.classificationRepo.GetLatest(ctx, datasetID, "tcn")
+	record, err := s.classificationRepo.GetLatest(ctx, datasetID, normalizedClassificationModelType(""))
 	if err != nil {
 		return map[string]any{}
 	}
@@ -391,15 +384,17 @@ func (s *AgentService) loadLatestClassification(ctx context.Context, datasetID u
 		_ = json.Unmarshal(record.Probabilities, &probabilities)
 	}
 	return map[string]any{
-		"id":              record.ID,
-		"model_type":      record.ModelType,
-		"predicted_label": record.PredictedLabel,
-		"confidence":      roundFloat(record.Confidence, 4),
-		"probabilities":   probabilities,
-		"explanation":     nullableString(record.Explanation),
-		"window_start":    record.WindowStart,
-		"window_end":      record.WindowEnd,
-		"created_at":      record.CreatedAt,
+		"id":                 record.ID,
+		"schema_version":     "v1",
+		"model_type":         normalizedClassificationModelType(record.ModelType),
+		"predicted_label":    record.PredictedLabel,
+		"confidence":         roundFloat(record.Confidence, 4),
+		"label_display_name": classificationLabelText(record.PredictedLabel),
+		"probabilities":      probabilities,
+		"explanation":        nullableString(record.Explanation),
+		"window_start":       record.WindowStart,
+		"window_end":         record.WindowEnd,
+		"created_at":         record.CreatedAt,
 	}
 }
 
@@ -420,17 +415,7 @@ func (s *AgentService) loadLatestForecastSummary(ctx context.Context, datasetID 
 	if len(summary) == 0 {
 		return map[string]any{}
 	}
-
-	if periods, ok := summary["forecast_peak_periods"].([]any); ok && len(periods) > 0 {
-		summary["peak_period"] = fmt.Sprintf("%v", periods[0])
-	}
-	summary["id"] = record.ID
-	summary["model_type"] = record.ModelType
-	summary["forecast_start"] = record.ForecastStart
-	summary["forecast_end"] = record.ForecastEnd
-	summary["granularity"] = record.Granularity
-	summary["created_at"] = record.CreatedAt
-	return summary
+	return normalizeForecastSummaryContext(summary, record)
 }
 
 func (s *AgentService) loadRuleAdvices(ctx context.Context, datasetID uint64) []map[string]any {
@@ -592,14 +577,20 @@ func (s *AgentService) touchSession(ctx context.Context, sessionID uint64) *appe
 }
 
 func buildLocalAgentFallback(sessionID uint64, question string, contextPayload map[string]any, errorReason string, createdAt *time.Time) map[string]any {
+	intent := inferAgentIntent(question)
+	missingInformation := buildLocalMissingInformation(contextPayload)
+	confidenceLevel := deriveLocalFallbackConfidenceLevel(contextPayload, missingInformation)
 	return map[string]any{
-		"session_id":   sessionID,
-		"answer":       buildLocalFallbackAnswer(strings.TrimSpace(question), contextPayload),
-		"citations":    buildLocalFallbackCitations(contextPayload),
-		"actions":      buildLocalFallbackActions(contextPayload),
-		"degraded":     true,
-		"error_reason": errorReason,
-		"created_at":   createdAt,
+		"session_id":          sessionID,
+		"answer":              buildLocalFallbackAnswer(strings.TrimSpace(question), contextPayload),
+		"citations":           buildLocalFallbackCitations(contextPayload),
+		"actions":             buildLocalFallbackActions(contextPayload),
+		"missing_information": missingInformation,
+		"confidence_level":    confidenceLevel,
+		"intent":              intent,
+		"degraded":            true,
+		"error_reason":        errorReason,
+		"created_at":          createdAt,
 	}
 }
 
@@ -691,6 +682,245 @@ func buildLocalFallbackActions(contextPayload map[string]any) []string {
 		return actions[:5]
 	}
 	return actions
+}
+
+func buildAgentResponsePayload(sessionID uint64, response *agentclient.AskResponse, fallbackIntent string, createdAt time.Time) map[string]any {
+	citations := response.Citations
+	if citations == nil {
+		citations = []agentclient.CitationItem{}
+	}
+	actions := response.Actions
+	if actions == nil {
+		actions = []string{}
+	}
+	missingInformation := response.MissingInformation
+	if missingInformation == nil {
+		missingInformation = []agentclient.MissingInformationItem{}
+	}
+
+	intent := strings.TrimSpace(response.Intent)
+	if intent == "" {
+		intent = fallbackIntent
+	}
+
+	confidenceLevel := normalizeConfidenceLevelPointer(response.ConfidenceLevel)
+	if confidenceLevel == nil {
+		derived := deriveAgentConfidenceLevel(response.Degraded, len(citations), len(missingInformation))
+		confidenceLevel = &derived
+	}
+
+	return map[string]any{
+		"session_id":          sessionID,
+		"answer":              strings.TrimSpace(response.Answer),
+		"citations":           citations,
+		"actions":             actions,
+		"missing_information": missingInformation,
+		"confidence_level":    *confidenceLevel,
+		"intent":              intent,
+		"degraded":            response.Degraded,
+		"error_reason":        response.ErrorReason,
+		"created_at":          createdAt,
+	}
+}
+
+func normalizeForecastSummaryContext(summary map[string]any, record domain.ForecastResultRecord) map[string]any {
+	normalized := map[string]any{
+		"id":               record.ID,
+		"schema_version":   "v1",
+		"model_type":       normalizeForecastModelType(stringValue(summary["model_type"]), record.ModelType),
+		"forecast_horizon": "1d",
+		"forecast_start":   record.ForecastStart,
+		"forecast_end":     record.ForecastEnd,
+		"granularity":      record.Granularity,
+		"created_at":       record.CreatedAt,
+		"risk_flags":       normalizeForecastRiskFlags(summary["risk_flags"]),
+	}
+
+	if value, ok := floatValue(summary["predicted_avg_load_w"]); ok {
+		normalized["predicted_avg_load_w"] = roundFloat(value, 2)
+	}
+	if value, ok := floatValue(summary["predicted_peak_load_w"]); ok {
+		normalized["predicted_peak_load_w"] = roundFloat(value, 2)
+	}
+	if value, ok := floatValue(summary["predicted_total_kwh"]); ok {
+		normalized["predicted_total_kwh"] = roundFloat(value, 4)
+	}
+
+	peakPeriod := stringValue(summary["peak_period"])
+	if peakPeriod == "" {
+		periods := stringListValue(summary["forecast_peak_periods"])
+		if len(periods) > 0 {
+			peakPeriod = periods[0]
+		}
+	}
+	if peakPeriod != "" {
+		normalized["peak_period"] = peakPeriod
+	}
+
+	if confidenceHint := normalizeConfidenceLevelValue(stringValue(summary["confidence_hint"])); confidenceHint != "" {
+		normalized["confidence_hint"] = confidenceHint
+	}
+
+	return normalized
+}
+
+func normalizeForecastModelType(primary string, fallback string) string {
+	for _, candidate := range []string{primary, fallback} {
+		if normalized := canonicalForecastModelType(candidate); normalized != "" {
+			return normalized
+		}
+	}
+	return "tft"
+}
+
+func normalizeForecastRiskFlags(value any) []string {
+	mapping := map[string]string{
+		"evening_peak_risk":  "evening_peak",
+		"night_load_risk":    "high_baseload",
+		"peak_usage_risk":    "daytime_peak",
+		"morning_spike_risk": "abnormal_rise",
+	}
+
+	normalized := make([]string, 0)
+	for _, item := range stringListValue(value) {
+		flag := strings.ToLower(strings.TrimSpace(item))
+		if mapped, exists := mapping[flag]; exists {
+			flag = mapped
+		}
+		switch flag {
+		case "evening_peak", "daytime_peak", "high_baseload", "abnormal_rise", "peak_overlap_risk":
+			if !containsString(normalized, flag) {
+				normalized = append(normalized, flag)
+			}
+		}
+	}
+	return normalized
+}
+
+func normalizeConfidenceLevelPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	normalized := normalizeConfidenceLevelValue(*value)
+	if normalized == "" {
+		return nil
+	}
+	return &normalized
+}
+
+func normalizeConfidenceLevelValue(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "high", "medium", "low":
+		return normalized
+	default:
+		return ""
+	}
+}
+
+func deriveAgentConfidenceLevel(degraded bool, citationCount int, missingCount int) string {
+	if degraded {
+		if missingCount == 0 && citationCount >= 3 {
+			return "medium"
+		}
+		return "low"
+	}
+	if missingCount == 0 && citationCount >= 2 {
+		return "high"
+	}
+	if citationCount > 0 {
+		return "medium"
+	}
+	return "low"
+}
+
+func stringListValue(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			normalized := stringValue(item)
+			if normalized != "" {
+				items = append(items, normalized)
+			}
+		}
+		return items
+	case []any:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			normalized := stringValue(item)
+			if normalized != "" {
+				items = append(items, normalized)
+			}
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func buildLocalMissingInformation(contextPayload map[string]any) []agentclient.MissingInformationItem {
+	items := make([]agentclient.MissingInformationItem, 0, 3)
+
+	classificationResult, _ := contextPayload["classification_result"].(map[string]any)
+	if stringValue(classificationResult["predicted_label"]) == "" {
+		items = append(items, agentclient.MissingInformationItem{
+			Key:      "classification_result",
+			Question: "请先补充最近一天的分类结果，或重新运行日用电分类分析。",
+			Reason:   "当前缺少用户日用电行为分类，无法稳定判断属于哪一类用电模式。",
+		})
+	}
+
+	forecastSummary, _ := contextPayload["forecast_summary"].(map[string]any)
+	if stringValue(forecastSummary["peak_period"]) == "" {
+		items = append(items, agentclient.MissingInformationItem{
+			Key:      "forecast_summary",
+			Question: "请先补充下一天负荷预测结果，尤其是峰值时段与总电量摘要。",
+			Reason:   "当前缺少未来一天的预测摘要，无法给出更具体的错峰建议。",
+		})
+	}
+
+	analysisSummary, _ := contextPayload["analysis_summary"].(map[string]any)
+	if _, ok := floatValue(analysisSummary["daily_avg_kwh"]); !ok {
+		items = append(items, agentclient.MissingInformationItem{
+			Key:      "analysis_summary",
+			Question: "请先补充统计分析摘要，例如日均用电量与峰时占比。",
+			Reason:   "基础统计摘要不足，回答只能依赖有限上下文，解释力度会明显下降。",
+		})
+	}
+
+	return items
+}
+
+func deriveLocalFallbackConfidenceLevel(contextPayload map[string]any, missingInformation []agentclient.MissingInformationItem) string {
+	if len(missingInformation) > 0 {
+		return "low"
+	}
+
+	classificationResult, _ := contextPayload["classification_result"].(map[string]any)
+	forecastSummary, _ := contextPayload["forecast_summary"].(map[string]any)
+	if stringValue(classificationResult["predicted_label"]) != "" && stringValue(forecastSummary["peak_period"]) != "" {
+		return "medium"
+	}
+	return "low"
+}
+
+func inferAgentIntent(question string) string {
+	normalized := strings.TrimSpace(question)
+	switch {
+	case strings.Contains(normalized, "分类"), strings.Contains(normalized, "类型"), strings.Contains(normalized, "模式"):
+		return "classification"
+	case strings.Contains(normalized, "预测"), strings.Contains(normalized, "明天"), strings.Contains(normalized, "未来"):
+		return "forecast"
+	case strings.Contains(normalized, "风险"), strings.Contains(normalized, "异常"), strings.Contains(normalized, "峰值"):
+		return "risk"
+	case strings.Contains(normalized, "概况"), strings.Contains(normalized, "整体"), strings.Contains(normalized, "总览"):
+		return "overview"
+	case strings.Contains(normalized, "建议"), strings.Contains(normalized, "怎么"), strings.Contains(normalized, "如何"), strings.Contains(normalized, "应该"):
+		return "advice"
+	default:
+		return "follow_up"
+	}
 }
 
 func buildLocalReportSummary(

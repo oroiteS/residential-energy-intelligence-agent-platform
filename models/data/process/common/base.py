@@ -21,6 +21,11 @@ from data.process.common.constants import (
     BURST_MAX_DURATION_SECONDS,
     MAX_DAILY_IMPUTED_RATIO,
     MAX_INTERPOLATION_GAP_SLOTS,
+    LOW_SIGNAL_DAY_MAX_THRESHOLD_W,
+    LOW_SIGNAL_DAY_NON_ZERO_RATIO_THRESHOLD,
+    LOW_SIGNAL_DAY_RANGE_THRESHOLD_W,
+    LOW_SIGNAL_DAY_STD_THRESHOLD_W,
+    LOW_SIGNAL_DAY_UNIQUE_VALUE_COUNT_THRESHOLD,
     OPENSYNTH_SUBDIR_NAME,
     REFIT_SUBDIR_NAME,
     RAW_FILE_GLOB,
@@ -592,6 +597,105 @@ def _clip_aggregate_outliers(
     return aggregate_series.clip(upper=clip_threshold), clip_threshold, clipped_mask
 
 
+def matches_low_signal_day_rule(
+    day_max_w: float,
+    day_range_w: float,
+    day_std_w: float,
+    non_zero_ratio: float,
+    unique_value_count: int,
+) -> bool:
+    """判断某一天是否属于应删除的低信息日。"""
+    is_full_zero_day = day_max_w <= 0.0 or non_zero_ratio <= 0.0
+    if is_full_zero_day:
+        return True
+
+    return bool(
+        day_max_w <= LOW_SIGNAL_DAY_MAX_THRESHOLD_W
+        and day_range_w <= LOW_SIGNAL_DAY_RANGE_THRESHOLD_W
+        and day_std_w <= LOW_SIGNAL_DAY_STD_THRESHOLD_W
+        and non_zero_ratio <= LOW_SIGNAL_DAY_NON_ZERO_RATIO_THRESHOLD
+        and unique_value_count <= LOW_SIGNAL_DAY_UNIQUE_VALUE_COUNT_THRESHOLD
+    )
+
+
+def _filter_low_signal_days(
+    base_df: pd.DataFrame,
+    summary: dict[str, object],
+) -> pd.DataFrame:
+    day_stats = (
+        base_df.groupby(["house_id", "date"])
+        .agg(
+            row_count=("slot_index", "size"),
+            slot_count=("slot_index", "nunique"),
+            min_slot=("slot_index", "min"),
+            max_slot=("slot_index", "max"),
+            day_max_w=("aggregate", "max"),
+            day_min_w=("aggregate", "min"),
+            day_std_w=("aggregate", "std"),
+            non_zero_ratio=("aggregate", lambda values: float(np.mean(values.to_numpy(dtype=float) > 0.0))),
+            unique_value_count=("aggregate", "nunique"),
+        )
+        .reset_index()
+    )
+    day_stats["day_std_w"] = day_stats["day_std_w"].fillna(0.0).astype(float)
+    day_stats["day_range_w"] = (
+        day_stats["day_max_w"] - day_stats["day_min_w"]
+    ).astype(float)
+    day_stats["matches_low_signal_rule"] = day_stats.apply(
+        lambda row: matches_low_signal_day_rule(
+            day_max_w=float(row["day_max_w"]),
+            day_range_w=float(row["day_range_w"]),
+            day_std_w=float(row["day_std_w"]),
+            non_zero_ratio=float(row["non_zero_ratio"]),
+            unique_value_count=int(row["unique_value_count"]),
+        ),
+        axis=1,
+    )
+    day_stats["is_full_zero_day"] = (
+        (day_stats["day_max_w"] <= 0.0)
+        | (day_stats["non_zero_ratio"] <= 0.0)
+    )
+
+    low_signal_days = day_stats.loc[
+        (day_stats["row_count"] == SLOTS_PER_DAY)
+        & (day_stats["slot_count"] == SLOTS_PER_DAY)
+        & (day_stats["min_slot"] == 0)
+        & (day_stats["max_slot"] == SLOTS_PER_DAY - 1)
+        & (day_stats["matches_low_signal_rule"]),
+        ["house_id", "date"],
+    ]
+    summary["low_signal_day_max_threshold_w"] = LOW_SIGNAL_DAY_MAX_THRESHOLD_W
+    summary["low_signal_day_range_threshold_w"] = LOW_SIGNAL_DAY_RANGE_THRESHOLD_W
+    summary["low_signal_day_std_threshold_w"] = LOW_SIGNAL_DAY_STD_THRESHOLD_W
+    summary["low_signal_day_non_zero_ratio_threshold"] = LOW_SIGNAL_DAY_NON_ZERO_RATIO_THRESHOLD
+    summary["low_signal_day_unique_value_count_threshold"] = LOW_SIGNAL_DAY_UNIQUE_VALUE_COUNT_THRESHOLD
+    summary["low_signal_days_removed"] = int(len(low_signal_days))
+    summary["full_zero_days_removed"] = int(
+        day_stats.loc[
+            (day_stats["row_count"] == SLOTS_PER_DAY)
+            & (day_stats["slot_count"] == SLOTS_PER_DAY)
+            & (day_stats["min_slot"] == 0)
+            & (day_stats["max_slot"] == SLOTS_PER_DAY - 1)
+            & (day_stats["is_full_zero_day"])
+        ].shape[0]
+    )
+
+    if low_signal_days.empty:
+        summary["low_signal_points_removed"] = 0
+        return base_df
+
+    low_signal_key_frame = low_signal_days.assign(_drop_low_signal_day=1)
+    filtered_df = base_df.merge(
+        low_signal_key_frame,
+        on=["house_id", "date"],
+        how="left",
+    )
+    removed_mask = filtered_df["_drop_low_signal_day"].fillna(0).astype(int) == 1
+    summary["low_signal_points_removed"] = int(removed_mask.sum())
+    filtered_df = filtered_df.loc[~removed_mask].drop(columns="_drop_low_signal_day")
+    return filtered_df.sort_values(["house_id", "timestamp"]).reset_index(drop=True)
+
+
 def build_base_timeseries(
     raw_df: pd.DataFrame,
     house_id: str,
@@ -719,9 +823,18 @@ def build_base_timeseries(
 
     base_df["active_appliance_count"] = base_df["active_appliance_count"].round()
     base_df["burst_event_count"] = base_df["burst_event_count"].round()
+    base_df = _filter_low_signal_days(base_df, summary)
 
     summary["cleaned_rows"] = int(len(cleaned_df))
     summary["base_rows"] = int(len(base_df))
+    if base_df.empty:
+        summary["is_skipped_after_low_signal_filter"] = 1
+        summary["skip_reason"] = "all_rows_removed_by_low_signal_filter"
+        summary["start_timestamp"] = None
+        summary["end_timestamp"] = None
+        return base_df, summary
+    summary["is_skipped_after_low_signal_filter"] = 0
+    summary["skip_reason"] = ""
     summary["start_timestamp"] = base_df["timestamp"].min().isoformat()
     summary["end_timestamp"] = base_df["timestamp"].max().isoformat()
     return base_df, summary
@@ -738,6 +851,7 @@ def build_base_dataset(
     summaries: list[dict[str, object]] = []
     processed_source_count = 0
     skipped_existing_count = 0
+    skipped_low_signal_house_count = 0
 
     refit_dir = resolve_source_dir(input_dir, REFIT_SUBDIR_NAME) or input_dir
     refit_files = sorted(refit_dir.glob(RAW_FILE_GLOB))
@@ -758,8 +872,12 @@ def build_base_dataset(
                 source_dataset="refit",
                 raw_aggregate_unit="W",
             )
-            base_df.to_csv(output_file, index=False)
             summaries.append(summary)
+            if base_df.empty:
+                skipped_low_signal_house_count += 1
+                refit_progress.update(detail=f"{house_id}（低信号整户跳过）")
+                continue
+            base_df.to_csv(output_file, index=False)
             processed_source_count += 1
             refit_progress.update(detail=house_id)
         refit_progress.finish()
@@ -785,8 +903,12 @@ def build_base_dataset(
                 source_dataset=source_dataset,
                 raw_aggregate_unit=raw_aggregate_unit,
             )
-            base_df.to_csv(output_file, index=False)
             summaries.append(summary)
+            if base_df.empty:
+                skipped_low_signal_house_count += 1
+                ukdale_progress.update(detail=f"{house_id}（低信号整户跳过）")
+                continue
+            base_df.to_csv(output_file, index=False)
             processed_source_count += 1
             ukdale_progress.update(detail=house_id)
         ukdale_progress.finish()
@@ -813,8 +935,12 @@ def build_base_dataset(
                     source_dataset=source_dataset,
                     raw_aggregate_unit=raw_aggregate_unit,
                 )
-                base_df.to_csv(output_file, index=False)
                 summaries.append(summary)
+                if base_df.empty:
+                    skipped_low_signal_house_count += 1
+                    slovakia_progress.update(detail=f"{house_id}（低信号整户跳过）")
+                    continue
+                base_df.to_csv(output_file, index=False)
                 processed_source_count += 1
                 slovakia_progress.update(detail=house_id)
             slovakia_progress.finish()
@@ -837,11 +963,14 @@ def build_base_dataset(
                     source_dataset=source_dataset,
                     raw_aggregate_unit=raw_aggregate_unit,
                 )
-                base_df.to_csv(output_file, index=False)
                 summaries.append(summary)
+                if base_df.empty:
+                    skipped_low_signal_house_count += 1
+                    continue
+                base_df.to_csv(output_file, index=False)
                 processed_source_count += 1
 
-    if processed_source_count == 0 and skipped_existing_count == 0:
+    if processed_source_count == 0 and skipped_existing_count == 0 and skipped_low_signal_house_count == 0:
         raise FileNotFoundError(
             f"未在 {input_dir} 找到可用原始数据。"
             "当前支持的数据源目录包括 refit、ukdale、"

@@ -1,0 +1,96 @@
+{
+  "config": {
+    "data": {
+      "metadata_path": "/root/models/data/processed/forecast/forecast_samples.csv",
+      "feature_spec_path": "/root/models/data/processed/forecast/forecast_feature_spec.json",
+      "features_path": null,
+      "targets_path": null,
+      "split_mode": "by_house",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "batch_size": 256,
+      "num_workers": 12,
+      "pin_memory": true,
+      "prefetch_factor": 4,
+      "baseline_week_weight": 0.8,
+      "baseline_recent_weight": 0.2,
+      "aggregate_feature_name": "aggregate",
+      "normalization_quantile": 0.95
+    },
+    "model": {
+      "hidden_size": 96,
+      "lstm_layers": 2,
+      "attention_heads": 4,
+      "dropout": 0.15,
+      "return_attention_weights": false,
+      "router_prior_weight": 1.0,
+      "global_gate_bias_init": -0.2,
+      "local_gate_bias_init": 0.0
+    },
+    "loss": {
+      "huber_delta": 1.0,
+      "diff_weight": 0.2,
+      "peak_weight": 0.4,
+      "peak_quantile": 0.9,
+      "ramp_weight": 0.3,
+      "guard_weight": 0.05,
+      "guard_margin": 0.02,
+      "gate_regularization": 0.001,
+      "regularization_warmup_epochs": 4,
+      "regularization_ramp_epochs": 6
+    },
+    "train": {
+      "output_dir": "/root/models/forecast/tft/output",
+      "seed": 42,
+      "max_epochs": 50,
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "gradient_clip_val": 1.0,
+      "accelerator": "auto",
+      "devices": 1,
+      "precision": "bf16-mixed",
+      "early_stopping_patience": 8,
+      "log_every_n_steps": 10,
+      "deterministic": false,
+      "benchmark": true,
+      "enable_tf32": true,
+      "matmul_precision": "high",
+      "compile_model": false,
+      "compile_mode": "max-autotune",
+      "enable_progress_bar": true,
+      "progress_bar_refresh_rate": 10,
+      "enable_model_summary": false,
+      "num_sanity_val_steps": 0
+    },
+    "test": {
+      "checkpoint_path": null,
+      "output_dir": "/root/models/forecast/tft/output/test"
+    }
+  },
+  "split_summary": {
+    "train_samples": 273598,
+    "val_samples": 58508,
+    "test_samples": 58988,
+    "train_houses": 718,
+    "val_houses": 154,
+    "test_houses": 155
+  },
+  "best_model_path": "/root/models/forecast/tft/output/checkpoints/best.ckpt",
+  "last_model_path": "/root/models/forecast/tft/output/checkpoints/last.ckpt",
+  "metrics_csv_path": "/root/models/forecast/tft/output/logs/tft/version_0/metrics.csv",
+  "best_score": 212.63856506347656,
+  "history_plot_paths": [
+    "/root/models/forecast/tft/output/training_curves.png",
+    "/root/models/forecast/tft/output/training_step_curves.png"
+  ],
+  "parameter_plot_paths": [
+    "/root/models/forecast/tft/output/parameter_histogram.png",
+    "/root/models/forecast/tft/output/parameter_norms.png"
+  ],
+  "parameter_summary_path": "/root/models/forecast/tft/output/parameter_summary.json",
+  "config_snapshot_path": "/root/models/forecast/tft/output/config_snapshot.json",
+  "runtime_summary_path": "/root/models/forecast/tft/output/runtime_summary.json",
+  "test_output_dir": "/root/models/forecast/tft/output/test",
+  "trainable_params": 1476100,
+  "total_params": 1476100
+}

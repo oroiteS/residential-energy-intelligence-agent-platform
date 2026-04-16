@@ -39,19 +39,22 @@ type predictClassificationRequest struct {
 }
 
 type predictClassificationResponse struct {
-	ModelType      string `json:"model_type"`
-	Date           string `json:"date"`
-	PredictedLabel string `json:"predicted_label"`
+	ModelType      string             `json:"model_type"`
+	Date           string             `json:"date"`
+	PredictedLabel string             `json:"predicted_label"`
+	Confidence     float64            `json:"confidence"`
+	Probabilities  map[string]float64 `json:"probabilities"`
 }
 
 type forecastRequest struct {
-	ModelType     string               `json:"model_type"`
-	DatasetID     int                  `json:"dataset_id"`
-	ForecastStart string               `json:"forecast_start"`
-	ForecastEnd   string               `json:"forecast_end"`
-	Granularity   string               `json:"granularity"`
-	Series        []serviceSeriesPoint `json:"series"`
-	Metadata      requestMetadata      `json:"metadata"`
+	ModelType              string                  `json:"model_type"`
+	DatasetID              int                     `json:"dataset_id"`
+	ForecastStart          string                  `json:"forecast_start"`
+	ForecastEnd            string                  `json:"forecast_end"`
+	Granularity            string                  `json:"granularity"`
+	Series                 []serviceSeriesPoint    `json:"series"`
+	ProfileProbabilityDays []profileProbabilityDay `json:"profile_probability_days,omitempty"`
+	Metadata               requestMetadata         `json:"metadata"`
 }
 
 type forecastResponse struct {
@@ -68,9 +71,19 @@ type agentAskRequest struct {
 }
 
 type agentAskResponse struct {
-	Answer      string `json:"answer"`
-	Degraded    bool   `json:"degraded"`
-	ErrorReason string `json:"error_reason"`
+	Answer             string                        `json:"answer"`
+	Actions            []string                      `json:"actions"`
+	Intent             string                        `json:"intent"`
+	ConfidenceLevel    string                        `json:"confidence_level"`
+	MissingInformation []agentMissingInformationItem `json:"missing_information"`
+	Degraded           bool                          `json:"degraded"`
+	ErrorReason        string                        `json:"error_reason"`
+}
+
+type agentMissingInformationItem struct {
+	Key      string `json:"key"`
+	Question string `json:"question"`
+	Reason   string `json:"reason"`
 }
 
 type requestWindow struct {
@@ -90,6 +103,11 @@ type serviceSeriesPoint struct {
 	BurstEventCount      int     `json:"burst_event_count"`
 }
 
+type profileProbabilityDay struct {
+	Date          string             `json:"date"`
+	Probabilities map[string]float64 `json:"probabilities"`
+}
+
 func NewServiceClient(
 	modelBaseURL string,
 	agentBaseURL string,
@@ -102,7 +120,7 @@ func NewServiceClient(
 
 	normalizedForecastModelType := strings.TrimSpace(strings.ToLower(forecastModelType))
 	if normalizedForecastModelType == "" {
-		normalizedForecastModelType = "transformer"
+		normalizedForecastModelType = "tft"
 	}
 
 	return &ServiceClient{
@@ -121,7 +139,7 @@ func (c *ServiceClient) PredictClassification(ctx context.Context, day daySeries
 	}
 
 	request := predictClassificationRequest{
-		ModelType: "tcn",
+		ModelType: "xgboost",
 		DatasetID: c.datasetID,
 		Window: requestWindow{
 			Start: toRFC3339(day.Points[0].Timestamp),
@@ -146,13 +164,19 @@ func (c *ServiceClient) Forecast(ctx context.Context, historyPoints []DataPoint,
 		return nil, fmt.Errorf("未配置 LIVE_MODEL_SERVICE_BASE_URL")
 	}
 
+	profileProbabilityDays, err := c.buildForecastProfileProbabilityDays(ctx, historyPoints)
+	if err != nil {
+		return nil, err
+	}
+
 	request := forecastRequest{
-		ModelType:     c.forecastModelType,
-		DatasetID:     c.datasetID,
-		ForecastStart: toRFC3339(targetDay.Points[0].Timestamp),
-		ForecastEnd:   toRFC3339(targetDay.Points[len(targetDay.Points)-1].Timestamp),
-		Granularity:   "15min",
-		Series:        buildServiceSeries(historyPoints),
+		ModelType:              c.forecastModelType,
+		DatasetID:              c.datasetID,
+		ForecastStart:          toRFC3339(targetDay.Points[0].Timestamp),
+		ForecastEnd:            toRFC3339(targetDay.Points[len(targetDay.Points)-1].Timestamp),
+		Granularity:            "15min",
+		Series:                 buildServiceSeries(historyPoints),
+		ProfileProbabilityDays: profileProbabilityDays,
 		Metadata: requestMetadata{
 			Granularity: "15min",
 			Unit:        "w",
@@ -164,6 +188,39 @@ func (c *ServiceClient) Forecast(ctx context.Context, historyPoints []DataPoint,
 		return nil, err
 	}
 	return &response, nil
+}
+
+func (c *ServiceClient) buildForecastProfileProbabilityDays(
+	ctx context.Context,
+	historyPoints []DataPoint,
+) ([]profileProbabilityDay, error) {
+	if len(historyPoints) == 0 {
+		return nil, fmt.Errorf("预测历史序列不能为空")
+	}
+	if len(historyPoints)%daySlots != 0 {
+		return nil, fmt.Errorf("预测历史序列长度必须能按天整除")
+	}
+
+	profileDays := make([]profileProbabilityDay, 0, len(historyPoints)/daySlots)
+	for start := 0; start < len(historyPoints); start += daySlots {
+		dayPoints := clonePoints(historyPoints[start : start+daySlots])
+		day := daySeries{
+			Date:   dayPoints[0].Date,
+			Points: dayPoints,
+		}
+		classification, err := c.PredictClassification(ctx, day)
+		if err != nil {
+			return nil, fmt.Errorf("预测前获取日型概率失败: %w", err)
+		}
+		if len(classification.Probabilities) == 0 {
+			return nil, fmt.Errorf("预测前获取日型概率失败: 分类结果缺少 probabilities")
+		}
+		profileDays = append(profileDays, profileProbabilityDay{
+			Date:          day.Date,
+			Probabilities: cloneProbabilityMap(classification.Probabilities),
+		})
+	}
+	return profileDays, nil
 }
 
 func (c *ServiceClient) Ask(
@@ -242,6 +299,17 @@ func buildServiceSeries(points []DataPoint) []serviceSeriesPoint {
 		})
 	}
 	return series
+}
+
+func cloneProbabilityMap(source map[string]float64) map[string]float64 {
+	if len(source) == 0 {
+		return map[string]float64{}
+	}
+	cloned := make(map[string]float64, len(source))
+	for label, probability := range source {
+		cloned[label] = probability
+	}
+	return cloned
 }
 
 func toRFC3339(value string) string {

@@ -3,7 +3,7 @@
 基于 `Robyn` 的 Python 后端，统一承载：
 
 - `classification`：XGBoost 分类推理
-- `forecast`：LSTM / Transformer 预测
+- `forecast`：TFT 预测
 - `agent`：LangChain 节能问答
 - `pdf`：Markdown 转 PDF
 
@@ -13,7 +13,7 @@
 - `app/config.py`：环境变量与路径配置
 - `app/bootstrap.py`：Robyn 路由注册
 - `configs/classification.yaml`：分类模型推理配置
-- `configs/forecast.yaml`：预测模型推理配置，支持 `lstm`、`transformer_encoder_direct`、`transformer_encdec_direct`
+- `configs/forecast.yaml`：预测模型推理配置，仅保留 `tft`
 - `app/services/classification_service.py`：分类推理封装
 - `app/services/forecast_service.py`：预测封装
 - `app/services/agent_service.py`：智能体服务门面，负责接入工作流与 LLM
@@ -179,7 +179,7 @@ PDF_TOC=false
 ```json
 {
   "schema_version": "v1",
-  "model_type": "transformer",
+  "model_type": "tft",
   "forecast_horizon": "1d",
   "predicted_avg_load_w": 520.0,
   "predicted_peak_load_w": 1680.0,
@@ -193,7 +193,7 @@ PDF_TOC=false
 说明：
 
 - `schema_version` 当前仅支持 `v1`
-- `model_type` 支持 `transformer`、`lstm`、`transformer_encoder_direct`、`transformer_encdec_direct`
+- `model_type` 当前仅支持 `tft`
 - `forecast_horizon` 当前仅支持 `1d`
 - 数值字段不能为负数
 - `risk_flags` 当前仅支持：
@@ -209,15 +209,12 @@ PDF_TOC=false
 - 当前分类与预测已在 `models_agent/app/inference/` 内同步维护本地推理实现
 - 默认只读取 `models_agent/checkpoints/` 下的本地权重，不再依赖外部 `models/` 目录
 - 分类权重固定放在 `models_agent/checkpoints/classification/xgboost/best_model.json`
-- LSTM 权重固定放在 `models_agent/checkpoints/forecast/lstm/best_model.pt`
-- Transformer Encoder Direct 权重固定放在 `models_agent/checkpoints/forecast/transformer_encoder_direct/best_model.pt`
-- Transformer EncDec Direct 权重固定放在 `models_agent/checkpoints/forecast/transformer_encdec_direct/best_model.pt`
+- TFT 权重固定放在 `models_agent/checkpoints/forecast/tft/best.ckpt`
 - 后续更新模型时，只需要覆盖对应位置的模型文件，无需再改代码或配置
 - 分类模型更新时，只需要覆盖 `models_agent/checkpoints/classification/xgboost/best_model.json`
-- 当前 `models_agent` 中：
-  - `lstm` 默认按 `7天 -> 1天` 推理
-  - 两个 Transformer 已切到 `7天 -> 1天` 推理
-- 预测推理已兼容两种 checkpoint 归一化格式：旧版全局标准化，以及新版 `aggregate=input_window` 样本级归一化
+- 当前 `models_agent` 中，预测模型统一为 `7天 -> 1天` 的 TFT
+- TFT 推理会基于历史 7 天序列自动补齐时间特征，并调用日级 XGBoost 分类器生成 4 维 profile 概率特征
+- 当前 repo 中的 `models_agent/checkpoints/forecast/tft/best.ckpt` 可以直接指向离线训练完成的最佳权重
 - 若未配置 LangChain 依赖或 LLM 参数，智能体接口会自动降级为规则回答
 - 智能体内部已改为“结构化状态 + 工作流”模式：
   - `intent_router`：识别分类解释、预测解释、风险判断、节能建议、跟进问答等意图

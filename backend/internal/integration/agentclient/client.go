@@ -19,6 +19,12 @@ type CitationItem struct {
 	Value any    `json:"value"`
 }
 
+type MissingInformationItem struct {
+	Key      string `json:"key"`
+	Question string `json:"question"`
+	Reason   string `json:"reason"`
+}
+
 type HistoryItem struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -33,11 +39,14 @@ type AskRequest struct {
 }
 
 type AskResponse struct {
-	Answer      string         `json:"answer"`
-	Citations   []CitationItem `json:"citations"`
-	Actions     []string       `json:"actions"`
-	Degraded    bool           `json:"degraded"`
-	ErrorReason *string        `json:"error_reason"`
+	Answer             string                   `json:"answer"`
+	Citations          []CitationItem           `json:"citations"`
+	Actions            []string                 `json:"actions"`
+	MissingInformation []MissingInformationItem `json:"missing_information"`
+	ConfidenceLevel    *string                  `json:"confidence_level"`
+	Intent             string                   `json:"intent"`
+	Degraded           bool                     `json:"degraded"`
+	ErrorReason        *string                  `json:"error_reason"`
 }
 
 type ReportSummaryRequest struct {
@@ -114,6 +123,7 @@ func (c *StubClient) Ask(_ context.Context, request AskRequest) (*AskResponse, e
 	if strings.TrimSpace(request.Question) != "" {
 		answer = answer + "问题：" + strings.TrimSpace(request.Question)
 	}
+	confidenceLevel := "low"
 
 	return &AskResponse{
 		Answer: answer,
@@ -124,8 +134,11 @@ func (c *StubClient) Ask(_ context.Context, request AskRequest) (*AskResponse, e
 				Value: "stub",
 			},
 		},
-		Actions:  []string{"补全 Python 智能体服务配置", "检查 LLM 参数与上下文组装逻辑"},
-		Degraded: true,
+		Actions:            []string{"补全 Python 智能体服务配置", "检查 LLM 参数与上下文组装逻辑"},
+		MissingInformation: []MissingInformationItem{},
+		ConfidenceLevel:    &confidenceLevel,
+		Intent:             "advice",
+		Degraded:           true,
 	}, nil
 }
 

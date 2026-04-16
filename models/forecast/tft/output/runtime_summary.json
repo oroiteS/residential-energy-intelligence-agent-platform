@@ -1,0 +1,19 @@
+{
+  "torch_version": "2.9.1+cu130",
+  "cuda_available": true,
+  "cuda_device_name": "NVIDIA GeForce RTX 4090",
+  "cuda_total_memory_gb": 23.52,
+  "accelerator": "auto",
+  "devices": 1,
+  "precision": "bf16-mixed",
+  "deterministic": false,
+  "benchmark": true,
+  "enable_tf32": true,
+  "matmul_precision": "high",
+  "compile_model": false,
+  "compile_mode": "max-autotune",
+  "batch_size": 256,
+  "num_workers": 12,
+  "prefetch_factor": 4,
+  "pin_memory": true
+}
