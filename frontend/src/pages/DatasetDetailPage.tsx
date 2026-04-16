@@ -61,6 +61,7 @@ import type {
   ForecastDetail,
   ForecastModelType,
   ForecastRecord,
+  ForecastSummary,
   PeakValleyConfig,
   ReportRecord,
   ReportType,
@@ -233,6 +234,23 @@ function buildFlatPeriods(config: PeakValleyConfig) {
     .map((range) => `${formatMinute(range.start)}-${range.end === 24 * 60 ? '24:00' : formatMinute(range.end)}`)
 }
 
+function getForecastPeakPeriods(summary: ForecastSummary) {
+  if (summary.forecast_peak_periods?.length) {
+    return summary.forecast_peak_periods
+  }
+  if (summary.peak_period) {
+    return [summary.peak_period]
+  }
+  return []
+}
+
+function getPredictedTotalKwh(summary: ForecastSummary) {
+  if (summary.predicted_total_kwh !== undefined && summary.predicted_total_kwh !== null) {
+    return summary.predicted_total_kwh
+  }
+  return (summary.predicted_avg_load_w * 24) / 1000
+}
+
 export function DatasetDetailPage() {
   const navigate = useNavigate()
   const params = useParams()
@@ -253,7 +271,7 @@ export function DatasetDetailPage() {
   const [forecasts, setForecasts] = useState<ForecastRecord[]>([])
   const [activeForecastId, setActiveForecastId] = useState<number | null>(null)
   const [forecastDetail, setForecastDetail] = useState<ForecastDetail | null>(null)
-  const [selectedForecastModel, setSelectedForecastModel] = useState<ForecastModelType>('lstm')
+  const [selectedForecastModel, setSelectedForecastModel] = useState<ForecastModelType>('tft')
   const [selectedFutureDay, setSelectedFutureDay] = useState(1)
 
   const loadDetail = useCallback(async () => {
@@ -276,7 +294,7 @@ export function DatasetDetailPage() {
         setReports([])
         setForecasts([])
         setActiveForecastId(null)
-        setSelectedForecastModel('lstm')
+        setSelectedForecastModel('tft')
         return
       }
 
@@ -300,7 +318,7 @@ export function DatasetDetailPage() {
       setReports(reportResult)
       setForecasts(forecastResult)
       setActiveForecastId(forecastResult[0]?.id ?? null)
-      setSelectedForecastModel(forecastResult[0]?.model_type ?? 'lstm')
+      setSelectedForecastModel(forecastResult[0]?.model_type ?? 'tft')
     } catch {
       setError('数据集详情加载失败，请稍后重试。')
     } finally {
@@ -699,9 +717,19 @@ export function DatasetDetailPage() {
                       {classification ? (
                         <Space direction="vertical" size={16} style={{ width: '100%' }}>
                           <Tag className="tone-tag tone-tag--accent">
-                            {classificationLabelMap[classification.predicted_label]}
+                            {classification.label_display_name ??
+                              classificationLabelMap[classification.predicted_label]}
                           </Tag>
-                          <Typography.Paragraph>{classification.explanation}</Typography.Paragraph>
+                          {classification.explanation ? (
+                            <Typography.Paragraph>{classification.explanation}</Typography.Paragraph>
+                          ) : (
+                            <Typography.Paragraph>
+                              当前分类模型将该样本识别为
+                              {classification.label_display_name ??
+                                classificationLabelMap[classification.predicted_label]}
+                              ，可结合下方概率分布判断稳定性。
+                            </Typography.Paragraph>
+                          )}
                           <Typography.Text strong>
                             最高置信度：{formatPercent(classification.confidence)}
                           </Typography.Text>
@@ -769,7 +797,7 @@ export function DatasetDetailPage() {
               <div className="page-stack">
                 <SectionCard
                   title="预测操作台"
-                  subtitle="基于最近 3 天窗口，递推预测未来第 1 到第 3 天。"
+                  subtitle="基于最近 7 天窗口，递推预测未来第 1 到第 3 天。"
                   extra={
                     <Space wrap>
                       <Select
@@ -785,13 +813,7 @@ export function DatasetDetailPage() {
                       <Select
                         value={selectedForecastModel}
                         style={{ width: 180 }}
-                        options={[
-                          { label: forecastModelMap.lstm, value: 'lstm' },
-                          {
-                            label: forecastModelMap.transformer,
-                            value: 'transformer',
-                          },
-                        ]}
+                        options={[{ label: forecastModelMap.tft, value: 'tft' }]}
                         onChange={(value: ForecastModelType) => setSelectedForecastModel(value)}
                       />
                       <Button
@@ -823,15 +845,15 @@ export function DatasetDetailPage() {
                       </Col>
                       <Col xs={24} md={12} xl={6}>
                         <MetricCard
-                          label="峰时占比"
-                          value={formatPercent(selectedForecast.summary.predicted_peak_ratio)}
+                          label="预测总量"
+                          value={`${formatNumber(getPredictedTotalKwh(selectedForecast.summary))} kWh`}
                           accent="coral"
                         />
                       </Col>
                       <Col xs={24} md={12} xl={6}>
                         <MetricCard
-                          label="谷时占比"
-                          value={formatPercent(selectedForecast.summary.predicted_valley_ratio)}
+                          label="风险标签"
+                          value={String(selectedForecast.summary.risk_flags.length)}
                           accent="olive"
                         />
                       </Col>
@@ -871,8 +893,8 @@ export function DatasetDetailPage() {
                                 </Typography.Text>
                               </Space>
                               <Typography.Text type="secondary">
-                                {formatPercent(item.summary.predicted_peak_ratio)} 峰时占比 ·{' '}
-                                {formatNumber(item.summary.predicted_avg_load_w)} W 平均负荷
+                                {formatNumber(item.summary.predicted_avg_load_w)} W 平均负荷 ·{' '}
+                                {formatNumber(getPredictedTotalKwh(item.summary))} kWh 预测总量
                               </Typography.Text>
                             </Space>
                           </List.Item>
@@ -918,15 +940,18 @@ export function DatasetDetailPage() {
                             {formatTime(selectedForecast.forecast_end)}
                           </Descriptions.Item>
                           <Descriptions.Item label="高负荷时段">
-                            {selectedForecast.summary.forecast_peak_periods.length ? (
+                            {getForecastPeakPeriods(selectedForecast.summary).length ? (
                               <Space direction="vertical" size={4}>
-                                {selectedForecast.summary.forecast_peak_periods.map((item) => (
+                                {getForecastPeakPeriods(selectedForecast.summary).map((item) => (
                                   <Typography.Text key={item}>{formatPeriodRange(item)}</Typography.Text>
                                 ))}
                               </Space>
                             ) : (
                               '--'
                             )}
+                          </Descriptions.Item>
+                          <Descriptions.Item label="预测总用电量">
+                            {formatNumber(getPredictedTotalKwh(selectedForecast.summary))} kWh
                           </Descriptions.Item>
                           <Descriptions.Item label="风险标签">
                             {selectedForecast.summary.risk_flags.length ? (

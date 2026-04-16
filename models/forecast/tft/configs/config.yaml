@@ -1,0 +1,132 @@
+# TFT 预测任务配置
+# 任务定义：
+# - 输入：过去 7 天，共 672 个 15min 时间步
+# - 输出：未来 1 天，共 96 个 15min 时间步
+# - 目标：预测 residual，最终预测值 = baseline + residual
+# - baseline：0.8 * t-7 同槽位 + 0.2 * t-1 同槽位
+
+data:
+  # 预测样本元数据 csv，由 data/process/main.py build-forecast 生成
+  metadata_path: "data/processed/forecast/forecast_samples.csv"
+  # 特征说明文件，记录特征名顺序与维度
+  feature_spec_path: "data/processed/forecast/forecast_feature_spec.json"
+  # 可选：显式指定特征数组路径；为 null 时默认按 metadata_path 推断
+  features_path: null
+  # 可选：显式指定目标数组路径；为 null 时默认按 metadata_path 推断
+  targets_path: null
+  # 数据切分方式：
+  # - by_house：按家庭隔离，适合评估未见家庭泛化
+  # - random：随机切分，仅作调试，不建议正式实验使用
+  split_mode: "by_house"
+  # 训练集比例
+  train_ratio: 0.7
+  # 验证集比例；测试集比例 = 1 - train_ratio - val_ratio
+  val_ratio: 0.15
+  # batch size；4090 24GB 单卡默认可先从 256 起步
+  batch_size: 256
+  # DataLoader worker 数；服务器训练建议 8 起步，本地调试不稳定时可设为 0
+  num_workers: 12
+  # 是否启用 pin_memory；仅在 GPU 训练时更有意义
+  pin_memory: true
+  # 每个 worker 预取 batch 数；仅 num_workers > 0 时生效
+  prefetch_factor: 4
+  # baseline 中上一周同星期几（t-7）的权重
+  baseline_week_weight: 0.8
+  # baseline 中前一天（t-1）的权重
+  baseline_recent_weight: 0.2
+  # encoder 输入中 aggregate 所在特征名，用于抽取 baseline 所需历史负荷
+  aggregate_feature_name: "aggregate"
+  # 归一化使用的分位数，按样本内 aggregate 计算；用于降低尖峰影响
+  normalization_quantile: 0.95
+
+model:
+  # TFT 隐藏维度；必须能被 attention_heads 整除
+  hidden_size: 96
+  # encoder / decoder LSTM 层数
+  lstm_layers: 2
+  # 多头注意力头数
+  attention_heads: 4
+  # dropout 比例
+  dropout: 0.15
+  # 是否返回注意力权重；关闭后更省显存，也更容易走高性能注意力内核
+  return_attention_weights: false
+  # router 中日型先验 logits 的融合权重；越大越依赖分类器先验
+  router_prior_weight: 1.0
+  # 全局 gate 的初始偏置；轻微负值表示起步保守，但不至于完全贴死 baseline
+  global_gate_bias_init: -0.2
+  # 局部 gate 的初始偏置；0 表示起始时不过度压制逐时刻修正
+  local_gate_bias_init: 0.0
+
+loss:
+  # Huber loss 的 delta，控制从 L2 向 L1 的切换阈值
+  huber_delta: 1.0
+  # 一阶差分损失权重，用于强调趋势和爬坡/回落形状
+  diff_weight: 0.2
+  # 高负荷时间点的额外权重
+  peak_weight: 0.4
+  # 判定高负荷时间点的分位数阈值
+  peak_quantile: 0.9
+  # 大爬坡/大回落时间点的额外权重
+  ramp_weight: 0.3
+  # baseline 保护项权重；避免模型把本来容易的样本改坏
+  guard_weight: 0.05
+  # baseline 保护项的容忍边界
+  guard_margin: 0.02
+  # gate 正则项权重；鼓励模型默认保守
+  gate_regularization: 0.001
+  # 前若干个 epoch 完全不启用 guard/gate 正则，让 residual 头先学出有效修正
+  regularization_warmup_epochs: 4
+  # warmup 结束后，再用若干个 epoch 线性拉高正则强度
+  regularization_ramp_epochs: 6
+
+train:
+  # 训练输出目录，会写入 checkpoint、日志、训练曲线、参数图等
+  output_dir: "forecast/tft/output"
+  # 随机种子
+  seed: 42
+  # 最大训练 epoch 数
+  max_epochs: 50
+  # AdamW 学习率
+  learning_rate: 0.001
+  # AdamW 权重衰减
+  weight_decay: 0.0001
+  # 梯度裁剪阈值，防止训练不稳定
+  gradient_clip_val: 1.0
+  # Lightning accelerator：
+  # - auto：自动选择 cuda / mps / cpu
+  # - cpu / gpu / mps：也可手动指定
+  accelerator: "auto"
+  # 使用的设备数；单机单卡通常填 1
+  devices: 1
+  # 精度设置；4090 上建议 bf16-mixed，若当前机器非 CUDA 会自动回退到 32-true
+  precision: "bf16-mixed"
+  # early stopping 容忍轮数；监控指标为 val_mae
+  early_stopping_patience: 8
+  # 每隔多少 step 打一次日志
+  log_every_n_steps: 10
+  # 是否启用确定性训练；追求速度时建议关闭
+  deterministic: false
+  # 是否启用 cudnn benchmark；仅在非 deterministic 且 CUDA 下有效
+  benchmark: true
+  # 是否启用 TF32；4090 上建议开启
+  enable_tf32: true
+  # float32 matmul 精度策略；4090 上 high 通常是速度/精度折中
+  matmul_precision: "high"
+  # 是否启用 torch.compile；固定 shape 的本任务通常值得开启
+  compile_model: false
+  # torch.compile 模式；max-autotune 首轮更慢，但后续吞吐更高
+  compile_mode: "max-autotune"
+  # 是否显示 Lightning 进度条；默认开启，便于直观看到训练推进情况
+  enable_progress_bar: true
+  # 进度条刷新频率；仅在启用进度条时生效
+  progress_bar_refresh_rate: 10
+  # 是否打印模型结构摘要；默认关闭，避免一大段无关输出
+  enable_model_summary: false
+  # 训练前 sanity check 的验证 batch 数；默认 0，避免正式训练前先刷一轮日志
+  num_sanity_val_steps: 0
+
+test:
+  # 可选：显式指定待测试 checkpoint；为 null 时默认读取 train.output_dir/checkpoints 下的最佳模型
+  checkpoint_path: null
+  # 测试输出目录，会写入 sample/household 指标、统计检验和预测曲线图
+  output_dir: "forecast/tft/output/test"

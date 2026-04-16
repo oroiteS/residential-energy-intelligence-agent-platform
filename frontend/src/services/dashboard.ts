@@ -209,7 +209,7 @@ export async function fetchLatestClassification(
     const { data } = await http.get<ApiEnvelope<{ classification: ClassificationResult }>>(
       `/datasets/${datasetId}/classifications/latest`,
       {
-        params: { model_type: 'tcn' },
+        params: { model_type: 'xgboost' },
       },
     )
     return data.data.classification
@@ -458,7 +458,7 @@ export async function runClassification(datasetId: number): Promise<Classificati
   const { data } = await http.post<ApiEnvelope<{ classification: ClassificationResult }>>(
     `/datasets/${datasetId}/classifications/predict`,
     {
-      model_type: 'tcn',
+      model_type: 'xgboost',
       window_mode: 'full_dataset',
       force_refresh: true,
     },

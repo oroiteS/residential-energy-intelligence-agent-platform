@@ -10,9 +10,13 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from data.process.classification.builder import build_classification_features
+from data.process.common.analysis import analyze_base_thresholds
 from data.process.common.base import build_base_dataset
 from data.process.forecast.builder import build_forecast_dataset
-from data.process.testing import export_live_sample, export_representative_test_samples
+from export_validation_upload_samples import (
+    export_live_sample,
+    export_representative_test_samples,
+)
 
 
 def _parse_csv_set(raw_value: str | None) -> set[str] | None:
@@ -32,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "常用命令示例:\n"
             "  python main.py preprocess-base\n"
+            "  python main.py analyze-base-thresholds\n"
             "  python main.py build-classification\n"
             "  python main.py build-forecast\n"
             "  python main.py cluster-kmeans\n"
@@ -103,6 +108,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="分类数据输出目录，默认: %(default)s",
     )
 
+    analysis_parser = subparsers.add_parser(
+        "analyze-base-thresholds",
+        help="分析基础时序的日级阈值分布",
+        description=(
+            "从基础 15 分钟时序计算日级统计，"
+            "输出总体/分数据源分位数与低信号候选样本，"
+            "用于决定后续的异常日过滤阈值。"
+        ),
+    )
+    analysis_parser.add_argument(
+        "--base-dir",
+        type=Path,
+        default=Path("data/processed/base_15min"),
+        help="基础时序目录，默认: %(default)s",
+    )
+    analysis_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/processed/base_threshold_analysis"),
+        help="阈值分析输出目录，默认: %(default)s",
+    )
+    analysis_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=200,
+        help="导出低信号候选日数量，默认: %(default)s",
+    )
+
     forecast_parser = subparsers.add_parser(
         "build-forecast",
         help="生成预测任务数据",
@@ -119,6 +152,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("data/processed/forecast"),
         help="预测数据输出目录，默认: %(default)s",
+    )
+    forecast_parser.add_argument(
+        "--classification-config",
+        type=Path,
+        default=Path("classification/xgboost/configs/config.yaml"),
+        help="历史日型 XGBoost 分类配置文件路径，默认: %(default)s",
     )
 
     kmeans_fit_parser = subparsers.add_parser(
@@ -162,7 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument(
         "--forecast-config",
         type=Path,
-        default=Path("forecast/LSTM/configs/config.yaml"),
+        default=Path("forecast/tft/configs/config.yaml"),
         help="预测模型配置文件路径，复用其中的数据切分参数，默认: %(default)s",
     )
     export_parser.add_argument(
@@ -213,7 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     live_parser.add_argument(
         "--forecast-config",
         type=Path,
-        default=Path("forecast/transformer_encoder_direct/configs/config.yaml"),
+        default=Path("forecast/tft/configs/config.yaml"),
         help="预测模型配置文件路径，默认: %(default)s",
     )
     live_parser.add_argument(
@@ -278,11 +317,33 @@ def main() -> None:
         )
         return
 
+    if args.command == "analyze-base-thresholds":
+        result = analyze_base_thresholds(
+            base_dir=args.base_dir,
+            output_dir=args.output_dir,
+            top_k=args.top_k,
+        )
+        print(
+            "已完成基础时序阈值分析，"
+            f"家庭数: {result['house_count']}，"
+            f"天数: {result['day_count']}，"
+            f"全零日占比: {result['full_zero_day_ratio']:.4f}，"
+            f"当前低信号规则命中占比: {result['low_signal_rule_ratio']:.4f}，"
+            f"输出目录: {result['output_dir']}"
+        )
+        return
+
     if args.command == "build-forecast":
         forecast_df = build_forecast_dataset(
-            base_dir=args.base_dir, output_dir=args.output_dir
+            base_dir=args.base_dir,
+            output_dir=args.output_dir,
+            classification_config_path=args.classification_config,
         )
-        print(f"已生成预测数据，样本数: {len(forecast_df)}")
+        print(
+            "已生成预测数据，"
+            f"样本数: {len(forecast_df)}，"
+            "输入特征: 5 维基础特征 + 4 维历史日型概率"
+        )
         return
 
     if args.command == "cluster-kmeans":
