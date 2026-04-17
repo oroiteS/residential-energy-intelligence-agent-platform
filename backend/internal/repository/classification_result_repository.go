@@ -11,9 +11,11 @@ import (
 
 type ClassificationResultRepository interface {
 	Create(ctx context.Context, record *domain.ClassificationResultRecord) error
+	Save(ctx context.Context, record *domain.ClassificationResultRecord) error
 	GetLatest(ctx context.Context, datasetID uint64, modelType string) (*domain.ClassificationResultRecord, error)
 	GetLatestByWindow(ctx context.Context, datasetID uint64, modelType string, windowStart, windowEnd *time.Time) (*domain.ClassificationResultRecord, error)
 	ListByDatasetID(ctx context.Context, datasetID uint64, modelType string, page, pageSize int) ([]domain.ClassificationResultRecord, int64, error)
+	ListAllByDatasetID(ctx context.Context, datasetID uint64, modelType string) ([]domain.ClassificationResultRecord, error)
 }
 
 type classificationResultRepository struct {
@@ -26,6 +28,10 @@ func NewClassificationResultRepository(db *gorm.DB) ClassificationResultReposito
 
 func (r *classificationResultRepository) Create(ctx context.Context, record *domain.ClassificationResultRecord) error {
 	return r.db.WithContext(ctx).Create(record).Error
+}
+
+func (r *classificationResultRepository) Save(ctx context.Context, record *domain.ClassificationResultRecord) error {
+	return r.db.WithContext(ctx).Save(record).Error
 }
 
 func (r *classificationResultRepository) GetLatest(ctx context.Context, datasetID uint64, modelType string) (*domain.ClassificationResultRecord, error) {
@@ -87,4 +93,17 @@ func (r *classificationResultRepository) ListByDatasetID(ctx context.Context, da
 		return nil, 0, err
 	}
 	return records, total, nil
+}
+
+func (r *classificationResultRepository) ListAllByDatasetID(ctx context.Context, datasetID uint64, modelType string) ([]domain.ClassificationResultRecord, error) {
+	query := r.db.WithContext(ctx).Where("dataset_id = ?", datasetID)
+	if modelType != "" {
+		query = query.Where("model_type = ?", modelType)
+	}
+
+	var records []domain.ClassificationResultRecord
+	if err := query.Order("created_at DESC, id DESC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	return records, nil
 }

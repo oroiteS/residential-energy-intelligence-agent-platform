@@ -17,10 +17,10 @@ export const datasetStatusMap: Record<DatasetStatus, { label: string; color: str
 }
 
 export const classificationLabelMap: Record<PredictedLabel, string> = {
-  day_high_night_low: '白天高晚上低型',
-  day_low_night_high: '白天低晚上高型',
-  all_day_high: '全天高负载型',
-  all_day_low: '全天低负载型',
+  morning_peak: '上午高峰型',
+  afternoon_peak: '下午高峰型',
+  day_low_night_high: '晚上高峰型',
+  all_day_low: '全天平稳型',
 }
 
 export const adviceTypeMap: Record<AdviceType, string> = {

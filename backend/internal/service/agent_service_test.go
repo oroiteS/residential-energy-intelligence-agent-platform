@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,8 +158,12 @@ func TestAgentServiceAskFallsBackWhenAgentClientFails(t *testing.T) {
 func TestAgentServiceAskUsesStoredHistoryAndPersistsMessages(t *testing.T) {
 	tempDir := t.TempDir()
 	processedPath := filepath.Join(tempDir, "processed.csv")
+	forecastDetailPath := filepath.Join(tempDir, "forecast_detail.json")
 	if err := os.WriteFile(processedPath, []byte(buildAgentTestCSV()), 0o644); err != nil {
 		t.Fatalf("写入 processed.csv 失败: %v", err)
+	}
+	if err := os.WriteFile(forecastDetailPath, []byte(buildAgentForecastDetailJSON()), 0o644); err != nil {
+		t.Fatalf("写入 forecast_detail.json 失败: %v", err)
 	}
 
 	now := time.Date(2026, 4, 2, 23, 45, 0, 0, time.Local)
@@ -233,12 +238,15 @@ func TestAgentServiceAskUsesStoredHistoryAndPersistsMessages(t *testing.T) {
 		agentForecastRepo{
 			records: []domain.ForecastResultRecord{
 				{
-					ID:          11,
-					DatasetID:   1,
-					ModelType:   "transformer",
-					Granularity: "15min",
-					Summary:     forecastSummary,
-					CreatedAt:   &now,
+					ID:            11,
+					DatasetID:     1,
+					ModelType:     "transformer",
+					ForecastStart: time.Date(2026, 4, 3, 0, 0, 0, 0, time.Local),
+					ForecastEnd:   time.Date(2026, 4, 3, 23, 45, 0, 0, time.Local),
+					Granularity:   "15min",
+					Summary:       forecastSummary,
+					DetailPath:    forecastDetailPath,
+					CreatedAt:     &now,
 				},
 			},
 		},
@@ -304,8 +312,8 @@ func TestAgentServiceAskUsesStoredHistoryAndPersistsMessages(t *testing.T) {
 	if modelType, _ := classificationResult["model_type"].(string); modelType != "xgboost" {
 		t.Fatalf("classification_result.model_type = %v, want xgboost", classificationResult["model_type"])
 	}
-	if labelDisplayName, _ := classificationResult["label_display_name"].(string); labelDisplayName != "白天低晚上高型" {
-		t.Fatalf("classification_result.label_display_name = %v, want 白天低晚上高型", classificationResult["label_display_name"])
+	if labelDisplayName, _ := classificationResult["label_display_name"].(string); labelDisplayName != "晚上高峰型" {
+		t.Fatalf("classification_result.label_display_name = %v, want 晚上高峰型", classificationResult["label_display_name"])
 	}
 
 	forecastResult, ok := client.request.Context["forecast_summary"].(map[string]any)
@@ -324,6 +332,18 @@ func TestAgentServiceAskUsesStoredHistoryAndPersistsMessages(t *testing.T) {
 	}
 	if len(riskFlags) != 2 || riskFlags[0] != "evening_peak" || riskFlags[1] != "abnormal_rise" {
 		t.Fatalf("forecast_summary.risk_flags = %#v, want [evening_peak abnormal_rise]", riskFlags)
+	}
+	historicalClassificationResults, ok := client.request.Context["historical_classification_results"].([]map[string]any)
+	if !ok || len(historicalClassificationResults) != 1 {
+		t.Fatalf("historical_classification_results = %#v, want 1 item", client.request.Context["historical_classification_results"])
+	}
+	futureForecastSummaries, ok := client.request.Context["future_forecast_summaries"].([]map[string]any)
+	if !ok || len(futureForecastSummaries) != 1 {
+		t.Fatalf("future_forecast_summaries = %#v, want 1 item", client.request.Context["future_forecast_summaries"])
+	}
+	futureClassificationResults, ok := client.request.Context["future_classification_results"].([]map[string]any)
+	if !ok || len(futureClassificationResults) != 1 {
+		t.Fatalf("future_classification_results = %#v, want 1 item", client.request.Context["future_classification_results"])
 	}
 }
 
@@ -390,6 +410,122 @@ func TestNormalizeReportSummaryResponseHidesTechnicalReasonInNote(t *testing.T) 
 	}
 	if !strings.Contains(note, "未启用增强总结能力") {
 		t.Fatalf("附注 = %s, want 用户可读说明", note)
+	}
+}
+
+func TestGenerateReportSummaryPassesExtendedTimelineContext(t *testing.T) {
+	tempDir := t.TempDir()
+	processedPath := filepath.Join(tempDir, "processed.csv")
+	forecastDetailPath := filepath.Join(tempDir, "forecast_detail.json")
+	if err := os.WriteFile(processedPath, []byte(buildAgentTestCSV()), 0o644); err != nil {
+		t.Fatalf("写入 processed.csv 失败: %v", err)
+	}
+	if err := os.WriteFile(forecastDetailPath, []byte(buildAgentForecastDetailJSON()), 0o644); err != nil {
+		t.Fatalf("写入 forecast_detail.json 失败: %v", err)
+	}
+
+	now := time.Date(2026, 4, 2, 23, 45, 0, 0, time.Local)
+	probabilities, _ := json.Marshal(map[string]float64{"day_low_night_high": 0.91})
+	forecastSummary, _ := json.Marshal(map[string]any{
+		"forecast_peak_periods": []string{"2026-04-03T19:00:00+08:00/2026-04-03T22:00:00+08:00"},
+		"risk_flags":            []string{"evening_peak_risk", "morning_spike_risk"},
+		"predicted_peak_load_w": 4820.5,
+	})
+	client := &recordingAgentClient{
+		reportResp: &agentclient.ReportSummaryResponse{
+			Title:    "居民用电分析报告 - house_1",
+			Overview: "已生成报告摘要。",
+			Sections: []agentclient.ReportSection{
+				{Title: "总体概览", Body: "已生成报告摘要。"},
+			},
+			Recommendations: []string{"优先检查未来峰值最高的一天"},
+		},
+	}
+
+	service := NewAgentService(
+		&config.AppConfig{OutputRootDir: tempDir},
+		agentDatasetRepo{
+			record: &domain.DatasetRecord{
+				ID:                1,
+				Name:              "house_1",
+				RawFilePath:       "raw.csv",
+				ProcessedFilePath: stringPtr(processedPath),
+				Status:            "ready",
+				RowCount:          288,
+				TimeEnd:           &now,
+			},
+		},
+		agentChatSessionRepo{},
+		newAgentChatMessageRepo(),
+		agentAnalysisRepo{
+			record: &domain.AnalysisResultRecord{
+				DatasetID:   1,
+				DailyAvgKWH: 9.88,
+				PeakRatio:   0.41,
+			},
+		},
+		agentClassificationRepo{
+			record: &domain.ClassificationResultRecord{
+				ID:             9,
+				DatasetID:      1,
+				ModelType:      "xgboost",
+				PredictedLabel: "day_low_night_high",
+				Confidence:     0.91,
+				Probabilities:  probabilities,
+				WindowStart:    timePtr(time.Date(2026, 4, 2, 0, 0, 0, 0, time.Local)),
+				WindowEnd:      timePtr(time.Date(2026, 4, 2, 23, 45, 0, 0, time.Local)),
+				CreatedAt:      &now,
+			},
+		},
+		agentForecastRepo{
+			records: []domain.ForecastResultRecord{
+				{
+					ID:            11,
+					DatasetID:     1,
+					ModelType:     "transformer",
+					ForecastStart: time.Date(2026, 4, 3, 0, 0, 0, 0, time.Local),
+					ForecastEnd:   time.Date(2026, 4, 3, 23, 45, 0, 0, time.Local),
+					Granularity:   "15min",
+					Summary:       forecastSummary,
+					DetailPath:    forecastDetailPath,
+					CreatedAt:     &now,
+				},
+			},
+		},
+		agentAdviceRepo{},
+		&SystemConfigService{},
+		client,
+		nil,
+	)
+
+	_, appErr := service.GenerateReportSummary(
+		context.Background(),
+		&domain.DatasetRecord{
+			ID:                1,
+			Name:              "house_1",
+			ProcessedFilePath: stringPtr(processedPath),
+			TimeEnd:           &now,
+		},
+		&domain.AnalysisResultRecord{
+			DatasetID:   1,
+			DailyAvgKWH: 9.88,
+			PeakRatio:   0.41,
+		},
+	)
+	if appErr != nil {
+		t.Fatalf("GenerateReportSummary() 返回错误: %v", appErr)
+	}
+	if client.reportRequest == nil {
+		t.Fatal("reportRequest 为空")
+	}
+	if items, ok := client.reportRequest.Context["historical_classification_results"].([]map[string]any); !ok || len(items) != 1 {
+		t.Fatalf("historical_classification_results = %#v, want 1 item", client.reportRequest.Context["historical_classification_results"])
+	}
+	if items, ok := client.reportRequest.Context["future_forecast_summaries"].([]map[string]any); !ok || len(items) != 1 {
+		t.Fatalf("future_forecast_summaries = %#v, want 1 item", client.reportRequest.Context["future_forecast_summaries"])
+	}
+	if items, ok := client.reportRequest.Context["future_classification_results"].([]map[string]any); !ok || len(items) != 1 {
+		t.Fatalf("future_classification_results = %#v, want 1 item", client.reportRequest.Context["future_classification_results"])
 	}
 }
 
@@ -554,6 +690,9 @@ type agentClassificationRepo struct {
 func (r agentClassificationRepo) Create(context.Context, *domain.ClassificationResultRecord) error {
 	return nil
 }
+func (r agentClassificationRepo) Save(context.Context, *domain.ClassificationResultRecord) error {
+	return nil
+}
 func (r agentClassificationRepo) GetLatest(context.Context, uint64, string) (*domain.ClassificationResultRecord, error) {
 	if r.record == nil {
 		return nil, errors.New("not found")
@@ -565,6 +704,12 @@ func (r agentClassificationRepo) GetLatestByWindow(context.Context, uint64, stri
 }
 func (r agentClassificationRepo) ListByDatasetID(context.Context, uint64, string, int, int) ([]domain.ClassificationResultRecord, int64, error) {
 	return nil, 0, nil
+}
+func (r agentClassificationRepo) ListAllByDatasetID(context.Context, uint64, string) ([]domain.ClassificationResultRecord, error) {
+	if r.record == nil {
+		return nil, nil
+	}
+	return []domain.ClassificationResultRecord{*r.record}, nil
 }
 
 type agentForecastRepo struct {
@@ -610,6 +755,30 @@ func buildAgentTestCSV() string {
 	return builder.String()
 }
 
+func buildAgentForecastDetailJSON() string {
+	start := time.Date(2026, 4, 3, 0, 0, 0, 0, time.Local)
+	builder := strings.Builder{}
+	builder.WriteString(`{"forecast":{"id":11},"series":[`)
+	for index := 0; index < 96; index++ {
+		if index > 0 {
+			builder.WriteString(",")
+		}
+		timestamp := start.Add(time.Duration(index) * 15 * time.Minute).Format(time.RFC3339)
+		predicted := 220.0
+		hour := start.Add(time.Duration(index) * 15 * time.Minute).Hour()
+		if hour >= 18 && hour < 23 {
+			predicted = 520.0
+		}
+		builder.WriteString(fmt.Sprintf(`{"timestamp":"%s","predicted":%.2f}`, timestamp, predicted))
+	}
+	builder.WriteString(`]}`)
+	return builder.String()
+}
+
 func uint64Ptr(value uint64) *uint64 {
+	return &value
+}
+
+func timePtr(value time.Time) *time.Time {
 	return &value
 }

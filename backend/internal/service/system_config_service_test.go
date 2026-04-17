@@ -44,7 +44,7 @@ func TestSystemConfigServiceGetNormalizesFrozenModelWindow(t *testing.T) {
 	if config.ModelHistoryWindowConfig.ClassificationDays != 1 {
 		t.Fatalf("classification_days = %d, want 1", config.ModelHistoryWindowConfig.ClassificationDays)
 	}
-	if config.ModelHistoryWindowConfig.ForecastHistoryDays != 3 {
-		t.Fatalf("forecast_history_days = %d, want 3", config.ModelHistoryWindowConfig.ForecastHistoryDays)
+	if config.ModelHistoryWindowConfig.ForecastHistoryDays != 7 {
+		t.Fatalf("forecast_history_days = %d, want 7", config.ModelHistoryWindowConfig.ForecastHistoryDays)
 	}
 }

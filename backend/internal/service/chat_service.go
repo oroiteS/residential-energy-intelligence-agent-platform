@@ -234,7 +234,7 @@ func chatSessionDTO(record *domain.ChatSessionRecord) map[string]any {
 }
 
 func chatMessageDTO(record *domain.ChatMessageRecord) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"id":           record.ID,
 		"session_id":   record.SessionID,
 		"role":         record.Role,
@@ -244,4 +244,25 @@ func chatMessageDTO(record *domain.ChatMessageRecord) map[string]any {
 		"tokens_used":  record.TokensUsed,
 		"created_at":   record.CreatedAt,
 	}
+	if payload := loadAssistantMessagePayload(record.ContentPath); len(payload) > 0 {
+		result["assistant_payload"] = payload
+	}
+	return result
+}
+
+func loadAssistantMessagePayload(contentPath *string) map[string]any {
+	if contentPath == nil || strings.TrimSpace(*contentPath) == "" {
+		return map[string]any{}
+	}
+
+	content, err := os.ReadFile(strings.TrimSpace(*contentPath))
+	if err != nil {
+		return map[string]any{}
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(content, &payload); err != nil {
+		return map[string]any{}
+	}
+	return payload
 }

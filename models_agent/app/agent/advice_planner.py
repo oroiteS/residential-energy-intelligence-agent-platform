@@ -62,30 +62,30 @@ class AdvicePlanner:
                     ),
                 ]
             )
-        elif predicted_label == "day_high_night_low":
+        elif predicted_label == "afternoon_peak":
             candidates.extend(
                 [
                     AdviceCandidate(
-                        key="daytime_peak_shift",
-                        title="白天负荷错峰",
-                        action="将白天可延后的高耗电任务尽量错开执行，减少白天集中启停。",
-                        rationale="分类结果显示白天负荷偏高，优先削减白天叠加负荷。",
+                        key="afternoon_peak_shift",
+                        title="下午高峰错峰",
+                        action="将下午可延后的高耗电任务尽量错开执行，减少午后到傍晚的集中启停。",
+                        rationale="分类结果显示下午时段更容易形成高峰，优先削减下午叠加负荷。",
                         priority_score=82,
                         evidence_keys=["predicted_label", "peak_ratio"],
                         category="classification",
                     )
                 ]
             )
-        elif predicted_label == "all_day_high":
+        elif predicted_label == "morning_peak":
             candidates.extend(
                 [
                     AdviceCandidate(
-                        key="all_day_baseload_reduce",
-                        title="全天基线负荷复查",
-                        action="优先复查全天持续运行设备，先处理长时间待机或持续供电负荷。",
-                        rationale="全天高负荷型更像基线抬升问题，先排查持续运行设备收益更稳定。",
+                        key="morning_peak_reduce",
+                        title="上午高峰压降",
+                        action="尽量错开早间集中启动的厨房、电热或清洁类设备，降低上午高峰叠加。",
+                        rationale="分类结果显示上午负荷更高，优先控制早间集中启动设备更直接。",
                         priority_score=86,
-                        evidence_keys=["predicted_label", "daily_avg_kwh"],
+                        evidence_keys=["predicted_label", "peak_ratio"],
                         category="classification",
                     )
                 ]
@@ -94,9 +94,9 @@ class AdvicePlanner:
             candidates.append(
                 AdviceCandidate(
                     key="maintain_low_load",
-                    title="维持低负荷模式",
-                    action="继续维持当前低负荷习惯，并重点关注未来高峰时段是否出现异常抬升。",
-                    rationale="当前整体负荷较低，更适合做趋势监控而不是强干预。",
+                    title="维持平稳负荷模式",
+                    action="继续维持当前平稳用电习惯，并重点关注未来高峰时段是否出现异常抬升。",
+                    rationale="当前整体负荷较平稳，更适合做趋势监控而不是强干预。",
                     priority_score=60,
                     evidence_keys=["predicted_label"],
                     category="classification",
@@ -184,4 +184,3 @@ class AdvicePlanner:
 
     def _pick_evidence_keys(self, evidence: list[EvidenceItem], limit: int) -> list[str]:
         return [item.key for item in evidence[:limit]]
-

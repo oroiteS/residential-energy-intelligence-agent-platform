@@ -40,8 +40,18 @@ class ReportBuilder:
             overview_parts.append(f"峰时占比约为 {ratio:.2f}%。")
         if context.classification_result.predicted_label:
             overview_parts.append(f"行为类型判断为 {label_text(context.classification_result.predicted_label)}。")
+        if context.historical_classification_results:
+            history_label = self._dominant_classification_label(
+                context.historical_classification_results
+            )
+            if history_label:
+                overview_parts.append(f"过去多天分类以 {label_text(history_label)} 为主。")
         if context.forecast_summary.peak_period:
             overview_parts.append(f"预测高负荷时段集中在 {context.forecast_summary.peak_period}。")
+        if context.future_forecast_summaries:
+            peak_day_text = self._peak_future_day_text(context.future_forecast_summaries)
+            if peak_day_text:
+                overview_parts.append(peak_day_text)
         if not overview_parts:
             overview_parts.append("当前报告基于已有统计、分类与预测结果自动整理。")
         overview_parts.append(f"当前总结置信等级为 {confidence_level.value}。")
@@ -52,6 +62,12 @@ class ReportBuilder:
             behavior_parts.append(f"当前家庭用电行为被识别为 {label_text(context.classification_result.predicted_label)}。")
         if context.classification_result.confidence is not None:
             behavior_parts.append(f"分类置信度约为 {float(context.classification_result.confidence) * 100:.2f}%。")
+        if context.future_classification_results:
+            future_label = self._dominant_classification_label(
+                context.future_classification_results
+            )
+            if future_label:
+                behavior_parts.append(f"未来多天分类判断以 {label_text(future_label)} 为主。")
         if context.recent_history_summary.avg_active_appliance_count is not None:
             behavior_parts.append(
                 f"平均活跃电器数量约 {float(context.recent_history_summary.avg_active_appliance_count):.2f} 个。"
@@ -102,3 +118,31 @@ class ReportBuilder:
     def _ordered_sections(self, sections: list[ReportSection]) -> list[ReportSection]:
         mapping = {item.title: item for item in sections if item.title in REPORT_SECTION_ORDER}
         return [mapping[title] for title in REPORT_SECTION_ORDER if title in mapping]
+
+    def _dominant_classification_label(self, items: list[object]) -> str | None:
+        label_counts: dict[str, int] = {}
+        for item in items:
+            predicted_label = getattr(item, "predicted_label", None)
+            if not predicted_label:
+                continue
+            label_counts[predicted_label] = label_counts.get(predicted_label, 0) + 1
+        if not label_counts:
+            return None
+        return max(label_counts.items(), key=lambda pair: (pair[1], pair[0]))[0]
+
+    def _peak_future_day_text(self, items: list[object]) -> str:
+        valid_items = [
+            item for item in items if getattr(item, "predicted_peak_load_w", None) is not None
+        ]
+        if not valid_items:
+            return ""
+        peak_item = max(
+            valid_items,
+            key=lambda item: float(getattr(item, "predicted_peak_load_w", 0.0) or 0.0),
+        )
+        day_offset = getattr(peak_item, "day_offset", None)
+        if day_offset is not None:
+            day_label = f"未来第 {day_offset} 天"
+        else:
+            day_label = str(getattr(peak_item, "date", "后续某天"))
+        return f"{day_label} 的预测峰值最高。"

@@ -151,11 +151,11 @@ PDF_TOC=false
   "model_type": "xgboost",
   "predicted_label": "day_low_night_high",
   "confidence": 0.88,
-  "label_display_name": "白天低晚上高型",
+  "label_display_name": "晚上高峰型",
   "probabilities": {
-    "day_high_night_low": 0.05,
+    "afternoon_peak": 0.05,
     "day_low_night_high": 0.88,
-    "all_day_high": 0.04,
+    "morning_peak": 0.04,
     "all_day_low": 0.03
   }
 }
@@ -166,9 +166,9 @@ PDF_TOC=false
 - `schema_version` 当前仅支持 `v1`
 - `model_type` 当前仅支持 `xgboost`
 - `predicted_label` 仅支持：
-  - `day_high_night_low`
+  - `afternoon_peak`
   - `day_low_night_high`
-  - `all_day_high`
+  - `morning_peak`
   - `all_day_low`
 - `confidence` 与 `probabilities` 取值必须在 `0~1`
 - 未显式传入 `label_display_name` 时，会根据 `predicted_label` 自动补齐

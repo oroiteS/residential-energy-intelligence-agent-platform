@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS `system_config` (
 INSERT INTO `system_config` (`config_key`, `config_value`, `description`)
 VALUES
     ('peak_valley_config', '{"peak":["07:00-11:00","18:00-23:00"],"valley":["23:00-07:00"]}', '峰谷时段配置（JSON 格式）'),
-    ('model_history_window_config', '{"classification_days":1,"forecast_history_days":3}', '模型历史窗口配置（分类/预测）'),
+    ('model_history_window_config', '{"classification_days":1,"forecast_history_days":7}', '模型历史窗口配置（分类/预测）'),
     ('energy_advice_prompt_template', '这是居民过去{{history_days}}天的实际用电情况、未来一段时间的预测用电情况，以及居民用电行为分类。请基于统计分析结果、历史用电摘要、未来预测摘要和分类结果，给出具体、可执行、可解释的节能建议，并指出关键依据。', '节能建议智能体提示词模板'),
     ('data_upload_dir', './uploads/datasets', '数据集上传目录'),
     ('report_output_dir', './outputs/reports', '报告输出目录')

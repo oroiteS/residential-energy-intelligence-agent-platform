@@ -69,6 +69,25 @@ class EvidenceBuilder:
             summary=self._build_ratio_summary("分类置信度", context.classification_result.confidence),
         )
 
+        historical_classification_summary = self._build_classification_timeline_summary(
+            context.historical_classification_results,
+            prefix="过去分类结果",
+        )
+        if historical_classification_summary:
+            evidence.append(
+                EvidenceItem(
+                    key="historical_classification_results",
+                    label="历史分类轨迹",
+                    value=[
+                        item.model_dump()
+                        for item in context.historical_classification_results
+                    ],
+                    source="historical_classification_results",
+                    priority_score=72,
+                    summary=historical_classification_summary,
+                )
+            )
+
         if context.forecast_summary.peak_period:
             evidence.append(
                 EvidenceItem(
@@ -118,6 +137,37 @@ class EvidenceBuilder:
                     source="forecast_summary",
                     priority_score=86 if intent in {AgentIntent.RISK, AgentIntent.ADVICE} else 68,
                     summary=f"预测风险标签包括 {context.forecast_summary.risk_flags}。",
+                )
+            )
+
+        future_forecast_summary = self._build_future_forecast_summary(
+            context.future_forecast_summaries
+        )
+        if future_forecast_summary:
+            evidence.append(
+                EvidenceItem(
+                    key="future_forecast_summaries",
+                    label="未来多日预测",
+                    value=[item.model_dump() for item in context.future_forecast_summaries],
+                    source="future_forecast_summaries",
+                    priority_score=83 if intent in {AgentIntent.FORECAST, AgentIntent.RISK, AgentIntent.ADVICE} else 69,
+                    summary=future_forecast_summary,
+                )
+            )
+
+        future_classification_summary = self._build_classification_timeline_summary(
+            context.future_classification_results,
+            prefix="未来分类结果",
+        )
+        if future_classification_summary:
+            evidence.append(
+                EvidenceItem(
+                    key="future_classification_results",
+                    label="未来分类判断",
+                    value=[item.model_dump() for item in context.future_classification_results],
+                    source="future_classification_results",
+                    priority_score=80 if intent in {AgentIntent.FORECAST, AgentIntent.ADVICE, AgentIntent.OVERVIEW} else 66,
+                    summary=future_classification_summary,
                 )
             )
 
@@ -277,3 +327,46 @@ class EvidenceBuilder:
         if ratio <= 1:
             ratio *= 100
         return f"{label}约为 {ratio:.2f}%。"
+
+    def _build_classification_timeline_summary(
+        self,
+        items: list[Any],
+        *,
+        prefix: str,
+    ) -> str:
+        if not items:
+            return ""
+        label_counts: dict[str, int] = {}
+        for item in items:
+            predicted_label = getattr(item, "predicted_label", None)
+            if not predicted_label:
+                continue
+            label_counts[predicted_label] = label_counts.get(predicted_label, 0) + 1
+        if not label_counts:
+            return ""
+        ordered = sorted(label_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        summary = "，".join(
+            f"{label_text(label)} {count} 天" for label, count in ordered[:3]
+        )
+        return f"{prefix}显示主要分布为：{summary}。"
+
+    def _build_future_forecast_summary(self, items: list[Any]) -> str:
+        if not items:
+            return ""
+        valid_items = [
+            item
+            for item in items
+            if item.predicted_peak_load_w is not None
+        ]
+        if not valid_items:
+            return ""
+        peak_item = max(valid_items, key=lambda item: float(item.predicted_peak_load_w or 0.0))
+        peak_day = (
+            getattr(peak_item, "day_offset", None)
+            or getattr(peak_item, "date", None)
+            or "未知日期"
+        )
+        return (
+            f"未来 {len(items)} 天预测已纳入分析，其中峰值最高的是 {peak_day}，"
+            f"预测峰值负荷约 {float(peak_item.predicted_peak_load_w):.2f} W。"
+        )

@@ -9,10 +9,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 LABEL_TEXT_MAPPING = {
-    "day_high_night_low": "白天高晚上低型",
-    "day_low_night_high": "白天低晚上高型",
-    "all_day_high": "全天高负载型",
-    "all_day_low": "全天低负载型",
+    "afternoon_peak": "下午高峰型",
+    "day_low_night_high": "晚上高峰型",
+    "all_day_low": "全天平稳型",
+    "morning_peak": "上午高峰型",
+}
+
+LEGACY_LABEL_MAPPING = {
+    "daytime_active": "afternoon_peak",
+    "daytime_peak_strong": "morning_peak",
+    "flat_stable": "all_day_low",
+    "night_dominant": "day_low_night_high",
+    "day_high_night_low": "afternoon_peak",
+    "all_day_high": "morning_peak",
 }
 
 REPORT_SECTION_ORDER = ["总体概览", "行为判断", "预测风险", "附注"]
@@ -34,6 +43,15 @@ def label_text(label: str) -> str:
     """将标签键转换为可读中文。"""
 
     return LABEL_TEXT_MAPPING.get(label, label)
+
+
+def normalize_classification_label(label: str) -> str:
+    """将历史标签统一映射到当前分类标签体系。"""
+
+    normalized = str(label).strip()
+    if not normalized:
+        return normalized
+    return LEGACY_LABEL_MAPPING.get(normalized, normalized)
 
 
 class AgentIntent(str, Enum):
@@ -106,7 +124,7 @@ class ClassificationResult(LooseModel):
     def validate_predicted_label(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = str(value).strip()
+        normalized = normalize_classification_label(value)
         if normalized not in LABEL_TEXT_MAPPING:
             raise ValueError("classification_result.predicted_label 不在支持的标签集合中")
         return normalized
@@ -126,12 +144,13 @@ class ClassificationResult(LooseModel):
     def validate_probabilities(cls, value: dict[str, float]) -> dict[str, float]:
         normalized: dict[str, float] = {}
         for label, probability in dict(value or {}).items():
-            if label not in LABEL_TEXT_MAPPING:
+            normalized_label = normalize_classification_label(label)
+            if normalized_label not in LABEL_TEXT_MAPPING:
                 raise ValueError("classification_result.probabilities 包含未定义标签")
             probability_value = float(probability)
             if probability_value < 0 or probability_value > 1:
                 raise ValueError("classification_result.probabilities 的值必须在 0 到 1 之间")
-            normalized[label] = probability_value
+            normalized[normalized_label] = probability_value
         return normalized
 
     @model_validator(mode="after")
@@ -217,6 +236,60 @@ class ForecastSummary(LooseModel):
         return normalized
 
 
+class TimelineClassificationResult(LooseModel):
+    """时间线分类结果。"""
+
+    date: str | None = None
+    predicted_label: str | None = None
+    confidence: float | None = None
+    label_display_name: str | None = None
+    probabilities: dict[str, float] = Field(default_factory=dict)
+    source: str | None = None
+    day_offset: int | None = None
+
+    @field_validator("predicted_label")
+    @classmethod
+    def validate_predicted_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = normalize_classification_label(value)
+        if normalized not in LABEL_TEXT_MAPPING:
+            raise ValueError("timeline_classification.predicted_label 不在支持的标签集合中")
+        return normalized
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        normalized = float(value)
+        if normalized < 0 or normalized > 1:
+            raise ValueError("timeline_classification.confidence 必须在 0 到 1 之间")
+        return normalized
+
+    @field_validator("probabilities")
+    @classmethod
+    def validate_probabilities(cls, value: dict[str, float]) -> dict[str, float]:
+        normalized: dict[str, float] = {}
+        for label, probability in dict(value or {}).items():
+            normalized_label = normalize_classification_label(label)
+            if normalized_label not in LABEL_TEXT_MAPPING:
+                raise ValueError("timeline_classification.probabilities 包含未定义标签")
+            probability_value = float(probability)
+            if probability_value < 0 or probability_value > 1:
+                raise ValueError("timeline_classification.probabilities 的值必须在 0 到 1 之间")
+            normalized[normalized_label] = probability_value
+        return normalized
+
+    @model_validator(mode="after")
+    def populate_derived_fields(self) -> "TimelineClassificationResult":
+        if self.predicted_label and not self.label_display_name:
+            self.label_display_name = label_text(self.predicted_label)
+        if self.confidence is None and self.predicted_label and self.probabilities:
+            self.confidence = self.probabilities.get(self.predicted_label)
+        return self
+
+
 class RecentHistorySummary(LooseModel):
     """近期历史摘要。"""
 
@@ -293,6 +366,9 @@ class AgentContext(LooseModel):
     analysis_summary: AnalysisSummary = Field(default_factory=AnalysisSummary)
     classification_result: ClassificationResult = Field(default_factory=ClassificationResult)
     forecast_summary: ForecastSummary = Field(default_factory=ForecastSummary)
+    historical_classification_results: list[TimelineClassificationResult] = Field(default_factory=list)
+    future_classification_results: list[TimelineClassificationResult] = Field(default_factory=list)
+    future_forecast_summaries: list[ForecastSummary] = Field(default_factory=list)
     recent_history_summary: RecentHistorySummary = Field(default_factory=RecentHistorySummary)
     rule_advices: list[RuleAdvice] = Field(default_factory=list)
     user_preferences: UserPreferences = Field(default_factory=UserPreferences)
@@ -305,6 +381,18 @@ class AgentContext(LooseModel):
         data["rule_advices"] = [
             RuleAdvice.from_any(item, index)
             for index, item in enumerate(raw_rule_advices)
+        ]
+        data["historical_classification_results"] = [
+            TimelineClassificationResult.model_validate(item)
+            for item in (data.get("historical_classification_results", []) or [])
+        ]
+        data["future_classification_results"] = [
+            TimelineClassificationResult.model_validate(item)
+            for item in (data.get("future_classification_results", []) or [])
+        ]
+        data["future_forecast_summaries"] = [
+            ForecastSummary.model_validate(item)
+            for item in (data.get("future_forecast_summaries", []) or [])
         ]
         return cls.model_validate(data)
 

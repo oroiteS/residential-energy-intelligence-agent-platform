@@ -110,13 +110,18 @@ func (s *Simulator) Tick() Snapshot {
 	currentDay := s.dayIndex
 	currentSlot := s.slotIndex + 1
 	if currentSlot >= len(s.days[currentDay].Points) {
+		previousNextDayForecast := cloneForecast(s.nextDayForecast)
 		s.latestClassification = s.refreshClassification(currentDay)
 		s.dayIndex = (s.dayIndex + 1) % len(s.days)
 		if s.dayIndex == 0 {
 			s.weekLoop++
 		}
 		s.slotIndex = 0
-		s.todayForecast = s.refreshForecast(s.dayIndex, currentDay)
+		if isForecastForDate(previousNextDayForecast, s.days[s.dayIndex].Date) {
+			s.todayForecast = previousNextDayForecast
+		} else {
+			s.todayForecast = s.refreshForecast(s.dayIndex, currentDay)
+		}
 		s.nextDayForecast = s.refreshForecast((s.dayIndex+1)%len(s.days), currentDay)
 	} else {
 		s.slotIndex = currentSlot
@@ -866,6 +871,10 @@ func cloneForecast(value DayForecast) DayForecast {
 	value.PeakPeriods = append([]string(nil), value.PeakPeriods...)
 	value.RiskFlags = append([]string(nil), value.RiskFlags...)
 	return value
+}
+
+func isForecastForDate(forecast DayForecast, date string) bool {
+	return strings.TrimSpace(forecast.Date) == strings.TrimSpace(date)
 }
 
 func localizeLabel(label string) string {

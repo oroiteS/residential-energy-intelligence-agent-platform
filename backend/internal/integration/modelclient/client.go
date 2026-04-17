@@ -38,18 +38,19 @@ type PredictClassificationRequest struct {
 }
 
 type PredictClassificationResponse struct {
-	ModelType           string  `json:"model_type"`
-	SampleID            string  `json:"sample_id"`
-	HouseID             string  `json:"house_id"`
-	Date                string  `json:"date"`
-	PredictedLabel      string  `json:"predicted_label"`
-	Confidence          float64 `json:"confidence"`
-	ProbDayHighNightLow float64 `json:"prob_day_high_night_low"`
-	ProbDayLowNightHigh float64 `json:"prob_day_low_night_high"`
-	ProbAllDayHigh      float64 `json:"prob_all_day_high"`
-	ProbAllDayLow       float64 `json:"prob_all_day_low"`
-	RuntimeDevice       string  `json:"runtime_device"`
-	RuntimeLoss         string  `json:"runtime_loss"`
+	ModelType           string             `json:"model_type"`
+	SampleID            string             `json:"sample_id"`
+	HouseID             string             `json:"house_id"`
+	Date                string             `json:"date"`
+	PredictedLabel      string             `json:"predicted_label"`
+	Confidence          float64            `json:"confidence"`
+	Probabilities       map[string]float64 `json:"probabilities"`
+	ProbAfternoonPeak   float64            `json:"prob_afternoon_peak"`
+	ProbAllDayLow       float64            `json:"prob_all_day_low"`
+	ProbDayLowNightHigh float64            `json:"prob_day_low_night_high"`
+	ProbMorningPeak     float64            `json:"prob_morning_peak"`
+	RuntimeDevice       string             `json:"runtime_device"`
+	RuntimeLoss         string             `json:"runtime_loss"`
 }
 
 type ForecastRequest struct {
@@ -134,20 +135,20 @@ func (c *StubClient) PredictClassification(_ context.Context, request PredictCla
 	label := "all_day_low"
 	switch {
 	case dayMean >= nightMean*1.2:
-		label = "day_high_night_low"
+		label = "afternoon_peak"
 	case nightMean >= dayMean*1.2:
 		label = "day_low_night_high"
 	case fullMean >= 500:
-		label = "all_day_high"
+		label = "morning_peak"
 	default:
 		label = "all_day_low"
 	}
 
 	probs := map[string]float64{
-		"day_high_night_low": 0.03,
+		"afternoon_peak":     0.03,
 		"day_low_night_high": 0.03,
-		"all_day_high":       0.03,
 		"all_day_low":        0.03,
+		"morning_peak":       0.03,
 	}
 	probs[label] = 0.91
 
@@ -163,10 +164,11 @@ func (c *StubClient) PredictClassification(_ context.Context, request PredictCla
 		Date:                date,
 		PredictedLabel:      label,
 		Confidence:          probs[label],
-		ProbDayHighNightLow: probs["day_high_night_low"],
+		Probabilities:       probs,
+		ProbAfternoonPeak:   probs["afternoon_peak"],
 		ProbDayLowNightHigh: probs["day_low_night_high"],
-		ProbAllDayHigh:      probs["all_day_high"],
 		ProbAllDayLow:       probs["all_day_low"],
+		ProbMorningPeak:     probs["morning_peak"],
 		RuntimeDevice:       "stub",
 		RuntimeLoss:         "rule_based",
 	}, nil

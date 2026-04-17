@@ -11,16 +11,16 @@ import pandas as pd
 
 
 LABELS = [
-    "daytime_active",
-    "daytime_peak_strong",
-    "flat_stable",
-    "night_dominant",
+    "afternoon_peak",
+    "all_day_low",
+    "day_low_night_high",
+    "morning_peak",
 ]
 LABEL_DISPLAY_NAMES = {
-    "daytime_active": "白天活跃型",
-    "daytime_peak_strong": "白天尖峰明显型",
-    "flat_stable": "平稳基线型",
-    "night_dominant": "夜间主导型",
+    "afternoon_peak": "下午高峰型",
+    "all_day_low": "全天平稳型",
+    "day_low_night_high": "晚上高峰型",
+    "morning_peak": "上午高峰型",
 }
 SEQUENCE_LENGTH = 96
 FEATURE_NAMES = ("aggregate",)

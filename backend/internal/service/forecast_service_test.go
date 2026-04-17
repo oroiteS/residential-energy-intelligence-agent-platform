@@ -76,23 +76,23 @@ func TestNormalizeForecastRequestRejectsUnknownModel(t *testing.T) {
 	}
 }
 
-func TestValidateFutureForecastWindowSupportsThreeFutureDays(t *testing.T) {
+func TestValidateFutureForecastWindowSupportsSevenFutureDays(t *testing.T) {
 	datasetEnd := time.Date(2026, 4, 7, 23, 45, 0, 0, time.Local)
-	start := time.Date(2026, 4, 10, 0, 0, 0, 0, time.Local)
+	start := time.Date(2026, 4, 14, 0, 0, 0, 0, time.Local)
 	end := start.Add(95 * 15 * time.Minute)
 
 	dayOffset, appErr := validateFutureForecastWindow(datasetEnd, start, end)
 	if appErr != nil {
 		t.Fatalf("validateFutureForecastWindow() returned unexpected error: %v", appErr)
 	}
-	if dayOffset != 3 {
-		t.Fatalf("dayOffset = %d, want 3", dayOffset)
+	if dayOffset != 7 {
+		t.Fatalf("dayOffset = %d, want 7", dayOffset)
 	}
 }
 
 func TestValidateFutureForecastWindowRejectsOutOfRangeDay(t *testing.T) {
 	datasetEnd := time.Date(2026, 4, 7, 23, 45, 0, 0, time.Local)
-	start := time.Date(2026, 4, 11, 0, 0, 0, 0, time.Local)
+	start := time.Date(2026, 4, 15, 0, 0, 0, 0, time.Local)
 	end := start.Add(95 * 15 * time.Minute)
 
 	_, appErr := validateFutureForecastWindow(datasetEnd, start, end)

@@ -2,10 +2,10 @@
 
 data:
   labels:
-    - "daytime_active"
-    - "daytime_peak_strong"
-    - "flat_stable"
-    - "night_dominant"
+    - "afternoon_peak"
+    - "all_day_low"
+    - "day_low_night_high"
+    - "morning_peak"
 
 model:
   num_boost_round: 2000

@@ -45,6 +45,8 @@ type ForecastListParams struct {
 	ModelType string
 }
 
+const maxFutureForecastDays = 7
+
 func NewForecastService(
 	cfg *config.AppConfig,
 	datasetRepo repository.DatasetRepository,
@@ -343,7 +345,7 @@ func validateFutureForecastWindow(datasetTimeEnd time.Time, start, end time.Time
 		})
 	}
 
-	for dayOffset := 1; dayOffset <= 3; dayOffset++ {
+	for dayOffset := 1; dayOffset <= maxFutureForecastDays; dayOffset++ {
 		expectedStart := datasetDayStart.AddDate(0, 0, dayOffset)
 		expectedEnd := expectedStart.Add(95 * 15 * time.Minute)
 		if start.Equal(expectedStart) && end.Equal(expectedEnd) {
@@ -351,7 +353,7 @@ func validateFutureForecastWindow(datasetTimeEnd time.Time, start, end time.Time
 		}
 	}
 
-	return 0, apperror.Unprocessable("INVALID_REQUEST", "当前仅支持预测未来 3 天（x+1 到 x+3）", map[string]any{
+	return 0, apperror.Unprocessable("INVALID_REQUEST", fmt.Sprintf("当前仅支持预测未来 %d 天（x+1 到 x+%d）", maxFutureForecastDays, maxFutureForecastDays), map[string]any{
 		"dataset_time_end": datasetTimeEnd,
 		"forecast_start":   start,
 		"forecast_end":     end,

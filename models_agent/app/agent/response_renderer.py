@@ -71,12 +71,28 @@ class ResponseRenderer:
             predicted_label = context.classification_result.predicted_label
             if predicted_label:
                 sentences.append(f"当前日类型判断为 {label_text(predicted_label)}。")
+            if context.historical_classification_results:
+                dominant_history_label = self._dominant_classification_label(
+                    context.historical_classification_results
+                )
+                if dominant_history_label:
+                    sentences.append(f"过去多天分类以 {label_text(dominant_history_label)} 为主。")
 
         if intent in {AgentIntent.FORECAST, AgentIntent.RISK, AgentIntent.OVERVIEW, AgentIntent.ADVICE, AgentIntent.FOLLOW_UP}:
             if context.forecast_summary.peak_period:
                 sentences.append(f"预测高负荷时段集中在 {context.forecast_summary.peak_period}。")
             if context.forecast_summary.risk_flags:
                 sentences.append(f"当前预测风险标签包括 {context.forecast_summary.risk_flags}。")
+            if context.future_forecast_summaries:
+                peak_day_text = self._peak_future_day_text(context.future_forecast_summaries)
+                if peak_day_text:
+                    sentences.append(peak_day_text)
+            if context.future_classification_results:
+                dominant_future_label = self._dominant_classification_label(
+                    context.future_classification_results
+                )
+                if dominant_future_label:
+                    sentences.append(f"未来多天分类判断以 {label_text(dominant_future_label)} 为主。")
 
         if context.analysis_summary.peak_ratio is not None:
             ratio = float(context.analysis_summary.peak_ratio)
@@ -101,3 +117,33 @@ class ResponseRenderer:
 
         return "".join(sentences)
 
+    def _dominant_classification_label(self, items: list[object]) -> str | None:
+        label_counts: dict[str, int] = {}
+        for item in items:
+            predicted_label = getattr(item, "predicted_label", None)
+            if not predicted_label:
+                continue
+            label_counts[predicted_label] = label_counts.get(predicted_label, 0) + 1
+        if not label_counts:
+            return None
+        return max(label_counts.items(), key=lambda pair: (pair[1], pair[0]))[0]
+
+    def _peak_future_day_text(self, items: list[object]) -> str:
+        valid_items = [
+            item for item in items if getattr(item, "predicted_peak_load_w", None) is not None
+        ]
+        if not valid_items:
+            return ""
+        peak_item = max(
+            valid_items,
+            key=lambda item: float(getattr(item, "predicted_peak_load_w", 0.0) or 0.0),
+        )
+        day_offset = getattr(peak_item, "day_offset", None)
+        if day_offset is not None:
+            day_label = f"未来第 {day_offset} 天"
+        else:
+            day_label = str(getattr(peak_item, "date", "后续某天"))
+        return (
+            f"未来多天预测中，{day_label} 的峰值最高，"
+            f"约为 {float(getattr(peak_item, 'predicted_peak_load_w', 0.0)):.2f} W。"
+        )

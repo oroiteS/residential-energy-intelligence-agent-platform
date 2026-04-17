@@ -260,8 +260,29 @@ func (s *AgentService) buildAgentContext(
 		"peak_valley_config":     runtimeConfig.PeakValleyConfig,
 	}
 
-	contextPayload["classification_result"] = s.loadLatestClassification(ctx, dataset.ID)
-	contextPayload["forecast_summary"] = s.loadLatestForecastSummary(ctx, dataset.ID)
+	historicalClassifications := s.loadHistoricalClassifications(
+		ctx,
+		dataset.ID,
+		runtimeConfig.ModelHistoryWindowConfig.ForecastHistoryDays,
+	)
+	contextPayload["historical_classification_results"] = historicalClassifications
+	contextPayload["classification_result"] = latestClassificationFromTimeline(historicalClassifications)
+	if len(contextPayload["classification_result"].(map[string]any)) == 0 {
+		contextPayload["classification_result"] = s.loadLatestClassification(ctx, dataset.ID)
+	}
+
+	futureForecastRecords := s.listFutureForecastRecords(
+		ctx,
+		dataset.ID,
+		dataset.TimeEnd,
+		maxFutureForecastDays,
+	)
+	contextPayload["future_forecast_summaries"] = buildFutureForecastSummaries(futureForecastRecords, dataset.TimeEnd)
+	contextPayload["forecast_summary"] = firstFutureForecastSummary(contextPayload["future_forecast_summaries"])
+	if len(contextPayload["forecast_summary"].(map[string]any)) == 0 {
+		contextPayload["forecast_summary"] = s.loadLatestForecastSummary(ctx, dataset.ID)
+	}
+	contextPayload["future_classification_results"] = buildFutureClassificationResults(futureForecastRecords, dataset.TimeEnd)
 	contextPayload["rule_advices"] = s.loadRuleAdvices(ctx, dataset.ID)
 	return contextPayload, nil
 }
@@ -387,10 +408,10 @@ func (s *AgentService) loadLatestClassification(ctx context.Context, datasetID u
 		"id":                 record.ID,
 		"schema_version":     "v1",
 		"model_type":         normalizedClassificationModelType(record.ModelType),
-		"predicted_label":    record.PredictedLabel,
+		"predicted_label":    normalizeClassificationLabel(record.PredictedLabel),
 		"confidence":         roundFloat(record.Confidence, 4),
 		"label_display_name": classificationLabelText(record.PredictedLabel),
-		"probabilities":      probabilities,
+		"probabilities":      normalizeClassificationProbabilities(probabilities),
 		"explanation":        nullableString(record.Explanation),
 		"window_start":       record.WindowStart,
 		"window_end":         record.WindowEnd,
@@ -416,6 +437,123 @@ func (s *AgentService) loadLatestForecastSummary(ctx context.Context, datasetID 
 		return map[string]any{}
 	}
 	return normalizeForecastSummaryContext(summary, record)
+}
+
+func (s *AgentService) loadHistoricalClassifications(ctx context.Context, datasetID uint64, limitDays int) []map[string]any {
+	if s.classificationRepo == nil {
+		return nil
+	}
+	records, err := s.classificationRepo.ListAllByDatasetID(ctx, datasetID, normalizedClassificationModelType(""))
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+
+	uniqueRecords := latestClassificationRecordsByWindow(records)
+	sort.Slice(uniqueRecords, func(i, j int) bool {
+		left := uniqueRecords[i]
+		right := uniqueRecords[j]
+		if left.WindowStart != nil && right.WindowStart != nil && !left.WindowStart.Equal(*right.WindowStart) {
+			return left.WindowStart.Before(*right.WindowStart)
+		}
+		return left.ID < right.ID
+	})
+	if limitDays > 0 && len(uniqueRecords) > limitDays {
+		uniqueRecords = uniqueRecords[len(uniqueRecords)-limitDays:]
+	}
+
+	items := make([]map[string]any, 0, len(uniqueRecords))
+	for _, record := range uniqueRecords {
+		recordCopy := record
+		items = append(items, classificationTimelineDTO(&recordCopy, "historical", nil))
+	}
+	return items
+}
+
+func (s *AgentService) listFutureForecastRecords(ctx context.Context, datasetID uint64, datasetTimeEnd *time.Time, limitDays int) []domain.ForecastResultRecord {
+	if s.forecastRepo == nil || datasetTimeEnd == nil {
+		return nil
+	}
+	records, err := s.forecastRepo.ListAllByDatasetID(ctx, datasetID)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+
+	deduplicated := latestForecastRecordsByRange(records)
+	datasetDayStart := normalizeDayStart(*datasetTimeEnd)
+	filtered := make([]domain.ForecastResultRecord, 0, len(deduplicated))
+	for _, record := range deduplicated {
+		dayOffset := forecastDayOffset(datasetDayStart, record.ForecastStart)
+		if dayOffset < 1 {
+			continue
+		}
+		if limitDays > 0 && dayOffset > limitDays {
+			continue
+		}
+		filtered = append(filtered, record)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		if !filtered[i].ForecastStart.Equal(filtered[j].ForecastStart) {
+			return filtered[i].ForecastStart.Before(filtered[j].ForecastStart)
+		}
+		if filtered[i].CreatedAt != nil && filtered[j].CreatedAt != nil && !filtered[i].CreatedAt.Equal(*filtered[j].CreatedAt) {
+			return filtered[i].CreatedAt.After(*filtered[j].CreatedAt)
+		}
+		return filtered[i].ID > filtered[j].ID
+	})
+	return filtered
+}
+
+func buildFutureForecastSummaries(records []domain.ForecastResultRecord, datasetTimeEnd *time.Time) []map[string]any {
+	if datasetTimeEnd == nil {
+		return nil
+	}
+	datasetDayStart := normalizeDayStart(*datasetTimeEnd)
+	items := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		summary := make(map[string]any)
+		if len(record.Summary) > 0 {
+			_ = json.Unmarshal(record.Summary, &summary)
+		}
+		if len(summary) == 0 {
+			continue
+		}
+		item := normalizeForecastSummaryContext(summary, record)
+		item["day_offset"] = forecastDayOffset(datasetDayStart, record.ForecastStart)
+		item["date"] = record.ForecastStart.Format("2006-01-02")
+		items = append(items, item)
+	}
+	return items
+}
+
+func buildFutureClassificationResults(records []domain.ForecastResultRecord, datasetTimeEnd *time.Time) []map[string]any {
+	if datasetTimeEnd == nil {
+		return nil
+	}
+	datasetDayStart := normalizeDayStart(*datasetTimeEnd)
+	items := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		item, ok := deriveFutureClassificationResult(record, datasetDayStart)
+		if ok {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func latestClassificationFromTimeline(raw []map[string]any) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	return raw[len(raw)-1]
+}
+
+func firstFutureForecastSummary(raw any) map[string]any {
+	items, ok := raw.([]map[string]any)
+	if !ok || len(items) == 0 {
+		return map[string]any{}
+	}
+	return items[0]
 }
 
 func (s *AgentService) loadRuleAdvices(ctx context.Context, datasetID uint64) []map[string]any {
@@ -671,8 +809,10 @@ func buildLocalFallbackActions(contextPayload map[string]any) []string {
 		switch stringValue(classificationResult["predicted_label"]) {
 		case "day_low_night_high":
 			actions = append(actions, "优先检查晚间持续运行设备", "将热水器改为定时运行")
-		case "day_high_night_low":
-			actions = append(actions, "将白天高耗电任务错峰执行", "重点排查白天集中启停设备")
+		case "afternoon_peak":
+			actions = append(actions, "将下午高耗电任务错峰执行", "重点排查午后到傍晚集中启停设备")
+		case "morning_peak":
+			actions = append(actions, "错开早间集中启动设备", "优先压降上午高峰叠加负荷")
 		default:
 			actions = append(actions, "复查峰时段高耗电设备", "优先调整可延后负荷到低负荷时段")
 		}
@@ -762,6 +902,136 @@ func normalizeForecastSummaryContext(summary map[string]any, record domain.Forec
 	}
 
 	return normalized
+}
+
+func latestForecastRecordsByRange(records []domain.ForecastResultRecord) []domain.ForecastResultRecord {
+	sortedRecords := append([]domain.ForecastResultRecord(nil), records...)
+	sort.Slice(sortedRecords, func(i, j int) bool {
+		left := sortedRecords[i]
+		right := sortedRecords[j]
+		if left.CreatedAt != nil && right.CreatedAt != nil && !left.CreatedAt.Equal(*right.CreatedAt) {
+			return left.CreatedAt.After(*right.CreatedAt)
+		}
+		return left.ID > right.ID
+	})
+
+	unique := make(map[string]domain.ForecastResultRecord, len(sortedRecords))
+	order := make([]string, 0, len(sortedRecords))
+	for _, record := range sortedRecords {
+		key := record.ForecastStart.UTC().Format(time.RFC3339) + "|" + record.ForecastEnd.UTC().Format(time.RFC3339)
+		if _, exists := unique[key]; exists {
+			continue
+		}
+		unique[key] = record
+		order = append(order, key)
+	}
+
+	result := make([]domain.ForecastResultRecord, 0, len(order))
+	for _, key := range order {
+		result = append(result, unique[key])
+	}
+	return result
+}
+
+func classificationTimelineDTO(record *domain.ClassificationResultRecord, source string, dayOffset *int) map[string]any {
+	item := classificationRecordDTO(record)
+	if record.WindowStart != nil {
+		item["date"] = record.WindowStart.Format("2006-01-02")
+	}
+	item["source"] = source
+	if dayOffset != nil {
+		item["day_offset"] = *dayOffset
+	}
+	return item
+}
+
+func forecastDayOffset(datasetDayStart time.Time, forecastStart time.Time) int {
+	return int(normalizeDayStart(forecastStart).Sub(datasetDayStart) / (24 * time.Hour))
+}
+
+func deriveFutureClassificationResult(record domain.ForecastResultRecord, datasetDayStart time.Time) (map[string]any, bool) {
+	series, ok := readForecastSeries(record.DetailPath)
+	if !ok || len(series) == 0 {
+		return nil, false
+	}
+
+	rows := make([]processedFeatureRow, 0, len(series))
+	for _, point := range series {
+		rows = append(rows, processedFeatureRow{
+			Timestamp: point.Timestamp,
+			Aggregate: point.Predicted,
+		})
+	}
+
+	predictedLabel := deriveClassificationLabelFromRows(rows)
+	dayOffset := forecastDayOffset(datasetDayStart, record.ForecastStart)
+	return map[string]any{
+		"schema_version":     "v1",
+		"predicted_label":    predictedLabel,
+		"label_display_name": classificationLabelText(predictedLabel),
+		"explanation":        buildClassificationExplanation(rows, predictedLabel),
+		"window_start":       record.ForecastStart,
+		"window_end":         record.ForecastEnd,
+		"created_at":         record.CreatedAt,
+		"date":               record.ForecastStart.Format("2006-01-02"),
+		"day_offset":         dayOffset,
+		"source":             "forecast_derived",
+	}, true
+}
+
+func readForecastSeries(path string) ([]domain.ForecastSeriesPoint, bool) {
+	if strings.TrimSpace(path) == "" {
+		return nil, false
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var detail domain.ForecastDetail
+	if err := json.Unmarshal(content, &detail); err != nil {
+		return nil, false
+	}
+	if len(detail.Series) == 0 {
+		return nil, false
+	}
+	return detail.Series, true
+}
+
+func deriveClassificationLabelFromRows(rows []processedFeatureRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+
+	dayTotal := 0.0
+	nightTotal := 0.0
+	dayCount := 0
+	nightCount := 0
+	fullTotal := 0.0
+	for _, row := range rows {
+		fullTotal += row.Aggregate
+		hour := row.Timestamp.Hour()
+		if hour >= 8 && hour < 18 {
+			dayTotal += row.Aggregate
+			dayCount++
+		} else {
+			nightTotal += row.Aggregate
+			nightCount++
+		}
+	}
+
+	dayMean := safeMean(dayTotal, dayCount)
+	nightMean := safeMean(nightTotal, nightCount)
+	fullMean := safeMean(fullTotal, len(rows))
+	switch {
+	case dayMean >= nightMean*1.2:
+		return "afternoon_peak"
+	case nightMean >= dayMean*1.2:
+		return "day_low_night_high"
+	case fullMean >= 500:
+		return "morning_peak"
+	default:
+		return "all_day_low"
+	}
 }
 
 func normalizeForecastModelType(primary string, fallback string) string {
@@ -932,6 +1202,9 @@ func buildLocalReportSummary(
 	classificationResult, _ := contextPayload["classification_result"].(map[string]any)
 	forecastSummary, _ := contextPayload["forecast_summary"].(map[string]any)
 	historySummary, _ := contextPayload["recent_history_summary"].(map[string]any)
+	historicalClassifications, _ := contextPayload["historical_classification_results"].([]map[string]any)
+	futureForecastSummaries, _ := contextPayload["future_forecast_summaries"].([]map[string]any)
+	futureClassifications, _ := contextPayload["future_classification_results"].([]map[string]any)
 
 	title := "居民用电分析报告"
 	if name := strings.TrimSpace(dataset.Name); name != "" {
@@ -948,8 +1221,14 @@ func buildLocalReportSummary(
 	if label := classificationLabelText(stringValue(classificationResult["predicted_label"])); label != "" {
 		overviewParts = append(overviewParts, "行为类型判断为"+label)
 	}
+	if summary := summarizeClassificationTimeline(historicalClassifications, "过去多天分类"); summary != "" {
+		overviewParts = append(overviewParts, summary)
+	}
 	if peakPeriod := stringValue(forecastSummary["peak_period"]); peakPeriod != "" {
 		overviewParts = append(overviewParts, "预测高负荷时段集中在"+peakPeriod)
+	}
+	if summary := summarizeFutureForecastTimeline(futureForecastSummaries); summary != "" {
+		overviewParts = append(overviewParts, summary)
 	}
 	if len(overviewParts) == 0 {
 		overviewParts = append(overviewParts, "当前智能体已降级，报告摘要基于已有分析结果自动整理。")
@@ -962,6 +1241,9 @@ func buildLocalReportSummary(
 	}
 	if value, ok := floatValue(classificationResult["confidence"]); ok {
 		behaviorParts = append(behaviorParts, fmt.Sprintf("分类置信度约 %.2f%%", value*100))
+	}
+	if summary := summarizeClassificationTimeline(futureClassifications, "未来多天分类"); summary != "" {
+		behaviorParts = append(behaviorParts, summary)
 	}
 	if value, ok := floatValue(historySummary["avg_active_appliance_count"]); ok {
 		behaviorParts = append(behaviorParts, fmt.Sprintf("最近窗口内平均活跃电器数量约 %.2f 个", value))
@@ -984,8 +1266,11 @@ func buildLocalReportSummary(
 	if value, ok := floatValue(forecastSummary["predicted_peak_load_w"]); ok {
 		riskParts = append(riskParts, fmt.Sprintf("预测峰值负荷约 %.2f W", value))
 	}
-	if riskFlags := stringValue(forecastSummary["risk_flags"]); riskFlags != "" {
-		riskParts = append(riskParts, "风险标签："+riskFlags)
+	if riskFlags := stringListValue(forecastSummary["risk_flags"]); len(riskFlags) > 0 {
+		riskParts = append(riskParts, "风险标签："+strings.Join(riskFlags, "、"))
+	}
+	if summary := summarizeFutureForecastTimeline(futureForecastSummaries); summary != "" {
+		riskParts = append(riskParts, summary)
 	}
 	if value, ok := floatValue(historySummary["max_load_w"]); ok {
 		riskParts = append(riskParts, fmt.Sprintf("历史窗口内最高负荷约 %.2f W", value))
@@ -1021,6 +1306,72 @@ func buildLocalReportSummary(
 		Degraded:        true,
 		ErrorReason:     stringPtr(reason),
 	}
+}
+
+func summarizeClassificationTimeline(items []map[string]any, prefix string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	labelCounts := make(map[string]int)
+	for _, item := range items {
+		label := stringValue(item["predicted_label"])
+		if label == "" {
+			continue
+		}
+		labelCounts[label]++
+	}
+	if len(labelCounts) == 0 {
+		return ""
+	}
+	type labelCount struct {
+		label string
+		count int
+	}
+	ordered := make([]labelCount, 0, len(labelCounts))
+	for label, count := range labelCounts {
+		ordered = append(ordered, labelCount{label: label, count: count})
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].count != ordered[j].count {
+			return ordered[i].count > ordered[j].count
+		}
+		return ordered[i].label < ordered[j].label
+	})
+	parts := make([]string, 0, min(len(ordered), 3))
+	for _, item := range ordered[:min(len(ordered), 3)] {
+		parts = append(parts, fmt.Sprintf("%s %d 天", classificationLabelText(item.label), item.count))
+	}
+	return prefix + "主要分布为" + strings.Join(parts, "、")
+}
+
+func summarizeFutureForecastTimeline(items []map[string]any) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var bestItem map[string]any
+	bestValue := -1.0
+	for _, item := range items {
+		value, ok := floatValue(item["predicted_peak_load_w"])
+		if !ok {
+			continue
+		}
+		if value > bestValue {
+			bestValue = value
+			bestItem = item
+		}
+	}
+	if bestItem == nil {
+		return ""
+	}
+	dayOffset, hasDayOffset := intValue(bestItem["day_offset"])
+	dayLabel := stringValue(bestItem["date"])
+	if hasDayOffset {
+		dayLabel = fmt.Sprintf("未来第 %d 天", dayOffset)
+	}
+	if dayLabel == "" {
+		dayLabel = "后续某天"
+	}
+	return fmt.Sprintf("未来多天预测中，%s 峰值最高，约 %.2f W", dayLabel, bestValue)
 }
 
 func normalizeReportSummaryResponse(dataset *domain.DatasetRecord, response *agentclient.ReportSummaryResponse) ReportSummary {
@@ -1115,15 +1466,15 @@ func orderedReportSections(values map[string]string) []agentclient.ReportSection
 }
 
 func classificationLabelText(label string) string {
-	switch label {
-	case "day_high_night_low":
-		return "白天高晚上低型"
+	switch normalizeClassificationLabel(label) {
+	case "afternoon_peak":
+		return "下午高峰型"
 	case "day_low_night_high":
-		return "白天低晚上高型"
-	case "all_day_high":
-		return "全天高负载型"
+		return "晚上高峰型"
 	case "all_day_low":
-		return "全天低负载型"
+		return "全天平稳型"
+	case "morning_peak":
+		return "上午高峰型"
 	default:
 		return label
 	}
@@ -1144,6 +1495,24 @@ func floatValue(value any) (float64, bool) {
 	case json.Number:
 		parsed, err := typed.Float64()
 		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func intValue(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case float32:
+		return int(typed), true
+	case json.Number:
+		parsed, err := typed.Int64()
+		return int(parsed), err == nil
 	default:
 		return 0, false
 	}

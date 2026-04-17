@@ -20,6 +20,11 @@ type SystemConfigService struct {
 	logger *zap.Logger
 }
 
+const (
+	frozenClassificationHistoryDays = 1
+	frozenForecastHistoryDays       = 7
+)
+
 type UpdateSystemConfigInput struct {
 	PeakValleyConfig           *domain.PeakValleyConfig         `json:"peak_valley_config"`
 	ModelHistoryWindowConfig   *domain.ModelHistoryWindowConfig `json:"model_history_window_config"`
@@ -79,8 +84,8 @@ func defaultSystemRuntimeConfig() *domain.SystemRuntimeConfig {
 			Valley: []string{"23:00-07:00"},
 		},
 		ModelHistoryWindowConfig: domain.ModelHistoryWindowConfig{
-			ClassificationDays:  1,
-			ForecastHistoryDays: 3,
+			ClassificationDays:  frozenClassificationHistoryDays,
+			ForecastHistoryDays: frozenForecastHistoryDays,
 		},
 		EnergyAdvicePromptTemplate: "这是居民过去{{history_days}}天的实际用电情况、未来一段时间的预测用电情况，以及居民用电行为分类。请基于统计分析结果、历史用电摘要、未来预测摘要和分类结果，给出具体、可执行、可解释的节能建议，并指出关键依据。",
 		DataUploadDir:              "./uploads/datasets",
@@ -223,8 +228,8 @@ func normalizeFrozenModelWindow(config *domain.ModelHistoryWindowConfig) {
 	if config == nil {
 		return
 	}
-	config.ClassificationDays = 1
-	config.ForecastHistoryDays = 3
+	config.ClassificationDays = frozenClassificationHistoryDays
+	config.ForecastHistoryDays = frozenForecastHistoryDays
 }
 
 func stringPtr(value string) *string {

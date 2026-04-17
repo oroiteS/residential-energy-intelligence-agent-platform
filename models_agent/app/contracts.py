@@ -18,7 +18,12 @@ AGENT_CONTEXT_OBJECT_KEYS = {
     "user_preferences",
     "conversation_state",
 }
-AGENT_CONTEXT_LIST_KEYS = {"rule_advices"}
+AGENT_CONTEXT_LIST_KEYS = {
+    "rule_advices",
+    "historical_classification_results",
+    "future_classification_results",
+    "future_forecast_summaries",
+}
 
 
 @dataclass(slots=True)
@@ -84,18 +89,20 @@ def _normalize_agent_context_payload(payload: Any) -> dict[str, Any]:
             raise ValidationError(f"context.{key} 必须是对象")
         normalized[key] = value
 
-    raw_rule_advices = normalized.get("rule_advices", [])
-    if raw_rule_advices is None:
-        raw_rule_advices = []
-    if not isinstance(raw_rule_advices, list):
-        raise ValidationError("context.rule_advices 必须是数组")
+    for list_key in AGENT_CONTEXT_LIST_KEYS:
+        raw_items = normalized.get(list_key, [])
+        if raw_items is None:
+            raw_items = []
+        if not isinstance(raw_items, list):
+            raise ValidationError(f"context.{list_key} 必须是数组")
+        normalized[list_key] = raw_items
 
+    raw_rule_advices = normalized.get("rule_advices", [])
     for index, item in enumerate(raw_rule_advices):
         if not isinstance(item, (dict, str)):
             raise ValidationError(
                 f"context.rule_advices[{index}] 只支持对象或字符串"
             )
-    normalized["rule_advices"] = raw_rule_advices
     try:
         from app.agent.state import AgentContext
     except ModuleNotFoundError:

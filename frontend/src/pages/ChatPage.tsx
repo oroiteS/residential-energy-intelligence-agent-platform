@@ -58,6 +58,15 @@ function renderCitationValue(value: AssistantAnswer['citations'][number]['value'
   return String(value)
 }
 
+function isAssistantAnswerPayload(value: unknown): value is AssistantAnswer {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'answer' in value &&
+    typeof (value as { answer?: unknown }).answer === 'string'
+  )
+}
+
 function AnswerSignalTags({ answer }: { answer: AssistantAnswer }) {
   return (
     <Space wrap size={[8, 8]}>
@@ -210,6 +219,71 @@ function AssistantResponsePanel({
   )
 }
 
+function AssistantMessageHistoryPanel({ answer }: { answer: AssistantAnswer }) {
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <AnswerSignalTags answer={answer} />
+
+      {answer.missing_information?.length ? (
+        <Alert
+          type="info"
+          showIcon
+          message="仍需补充的信息"
+          description={
+            <div>
+              {answer.missing_information.map((item) => (
+                <Typography.Paragraph key={item.key} style={{ marginBottom: 8 }}>
+                  {item.question}：{item.reason}
+                </Typography.Paragraph>
+              ))}
+            </div>
+          }
+        />
+      ) : null}
+
+      {answer.citations.length ? (
+        <div>
+          <Typography.Text strong>引用依据</Typography.Text>
+          <div className="assistant-citation-grid" style={{ marginTop: 8 }}>
+            {answer.citations.map((citation) => (
+              <div key={citation.key} className="assistant-citation-card">
+                <Typography.Text className="assistant-citation-card__label">
+                  {citation.label}
+                </Typography.Text>
+                <Typography.Paragraph className="assistant-citation-card__value">
+                  {renderCitationValue(citation.value)}
+                </Typography.Paragraph>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {answer.actions.length ? (
+        <div>
+          <Typography.Text strong>建议动作</Typography.Text>
+          <List
+            className="assistant-action-list"
+            size="small"
+            style={{ marginTop: 8 }}
+            dataSource={answer.actions}
+            renderItem={(item, index) => (
+              <List.Item>
+                <div className="assistant-action-item">
+                  <span className="assistant-action-item__index">
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <Typography.Text>{item}</Typography.Text>
+                </div>
+              </List.Item>
+            )}
+          />
+        </div>
+      ) : null}
+    </Space>
+  )
+}
+
 export function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [datasets, setDatasets] = useState<DatasetSummary[]>([])
@@ -327,8 +401,21 @@ export function ChatPage() {
       try {
         const nextMessages = await fetchChatMessages(activeSessionId)
         if (active) {
+          const latestAssistantPayload = [...nextMessages]
+            .reverse()
+            .map((item) => item.assistant_payload)
+            .find((item) => isAssistantAnswerPayload(item)) ?? null
           startTransition(() => {
             setMessages(nextMessages)
+            setAnswerBySessionId((current) => {
+              const next = { ...current }
+              if (latestAssistantPayload) {
+                next[activeSessionId] = latestAssistantPayload
+              } else {
+                delete next[activeSessionId]
+              }
+              return next
+            })
           })
         }
       } catch (error) {
@@ -617,16 +704,19 @@ export function ChatPage() {
                               <Tag className={item.role === 'assistant' ? 'tone-tag tone-tag--accent' : 'tone-tag'}>
                                 {item.role === 'assistant' ? '助手' : '用户'}
                               </Tag>
-                              <Typography.Text type="secondary">
-                                {formatDateTime(item.created_at)}
-                              </Typography.Text>
-                            </Space>
-                            <Typography.Paragraph style={{ marginBottom: 0 }}>
-                              {item.content}
-                            </Typography.Paragraph>
+                            <Typography.Text type="secondary">
+                              {formatDateTime(item.created_at)}
+                            </Typography.Text>
                           </Space>
-                        </div>
-                      </List.Item>
+                          <Typography.Paragraph style={{ marginBottom: 0 }}>
+                            {item.content}
+                          </Typography.Paragraph>
+                          {item.role === 'assistant' && isAssistantAnswerPayload(item.assistant_payload) ? (
+                            <AssistantMessageHistoryPanel answer={item.assistant_payload} />
+                          ) : null}
+                        </Space>
+                      </div>
+                    </List.Item>
                     )}
                   />
                 )}

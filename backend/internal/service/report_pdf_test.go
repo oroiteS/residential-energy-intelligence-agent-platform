@@ -141,7 +141,7 @@ func TestSanitizePDFTextRemovesBulletAndHumanizesTokens(t *testing.T) {
 	if !strings.Contains(value, "全天平均负荷") {
 		t.Fatalf("sanitizePDFText() 未输出中文字段名: %q", value)
 	}
-	if !strings.Contains(value, "白天低晚上高型") {
+	if !strings.Contains(value, "晚上高峰型") {
 		t.Fatalf("sanitizePDFText() 未输出中文分类名: %q", value)
 	}
 }
