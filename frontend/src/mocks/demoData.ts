@@ -116,7 +116,7 @@ export const demoSystemConfig: SystemConfig = {
   },
   model_history_window_config: {
     classification_days: 1,
-    forecast_history_days: 3,
+    forecast_history_days: 7,
   },
   energy_advice_prompt_template:
     '这是居民过去{{history_days}}天的实际用电情况、未来一段时间的预测用电情况，以及居民用电行为分类。请基于统计分析结果、历史用电摘要、未来预测摘要和分类结果，给出具体、可执行、可解释的节能建议，并指出关键依据。',
@@ -268,11 +268,11 @@ export const demoClassifications: Record<number, ClassificationResult> = {
     schema_version: 'v1',
     predicted_label: 'day_low_night_high',
     confidence: 0.83,
-    label_display_name: '白天低晚上高型',
+    label_display_name: '晚上高峰型',
     probabilities: {
-      day_high_night_low: 0.06,
+      morning_peak: 0.07,
+      afternoon_peak: 0.06,
       day_low_night_high: 0.83,
-      all_day_high: 0.07,
       all_day_low: 0.04,
     },
     explanation: '夜间均值显著高于白天均值，且 night_mean/day_mean = 1.46。',
@@ -285,13 +285,13 @@ export const demoClassifications: Record<number, ClassificationResult> = {
     dataset_id: 2,
     model_type: 'xgboost',
     schema_version: 'v1',
-    predicted_label: 'day_high_night_low',
+    predicted_label: 'afternoon_peak',
     confidence: 0.78,
-    label_display_name: '白天高晚上低型',
+    label_display_name: '下午高峰型',
     probabilities: {
-      day_high_night_low: 0.78,
+      morning_peak: 0.06,
+      afternoon_peak: 0.78,
       day_low_night_high: 0.11,
-      all_day_high: 0.06,
       all_day_low: 0.05,
     },
     explanation: '白天时段平均负荷明显高于夜间，day_mean/night_mean = 1.28。',
@@ -320,7 +320,7 @@ export const demoAdvices: Record<number, AdviceDetail[]> = {
             action: '将洗衣、充电等任务改到谷时段执行。',
           },
           {
-            reason: '夜间持续负荷偏高，分类结果为“白天低晚上高型”',
+            reason: '夜间持续负荷偏高，分类结果为“晚上高峰型”',
             action: '检查客厅和厨房晚间持续待机设备，优先排查热水器与路由器周边电器。',
           },
         ],
@@ -658,7 +658,7 @@ export function buildMockAssistantExchange(
       {
         key: 'predicted_label',
         label: '行为类型',
-        value: datasetId === 1 ? 'day_low_night_high' : 'day_high_night_low',
+        value: datasetId === 1 ? 'day_low_night_high' : 'afternoon_peak',
       },
       {
         key: 'risk_flags',

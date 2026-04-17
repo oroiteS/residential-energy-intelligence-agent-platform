@@ -221,6 +221,23 @@ export async function fetchLatestClassification(
   }
 }
 
+export async function fetchClassifications(datasetId: number): Promise<ClassificationResult[]> {
+  if (isMockMode) {
+    await sleep()
+    const result = useMockStore.getState().classifications[datasetId]
+    return result ? [result] : []
+  }
+
+  const { data } = await http.get<
+    ApiEnvelope<{
+      items: ClassificationResult[]
+    }>
+  >(`/datasets/${datasetId}/classifications`, {
+    params: { model_type: 'xgboost', page: 1, page_size: 365 },
+  })
+  return data.data.items
+}
+
 export async function fetchAdvices(datasetId: number): Promise<AdviceDetail[]> {
   if (isMockMode) {
     await sleep()

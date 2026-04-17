@@ -2,9 +2,9 @@ export type DatasetStatus = 'uploaded' | 'processing' | 'ready' | 'error'
 export type ForecastModelType = 'tft'
 export type ClassificationModelType = 'xgboost'
 export type PredictedLabel =
-  | 'day_high_night_low'
+  | 'morning_peak'
+  | 'afternoon_peak'
   | 'day_low_night_high'
-  | 'all_day_high'
   | 'all_day_low'
 export type AdviceType = 'rule' | 'llm'
 export type ReportType = 'excel' | 'html' | 'pdf'
@@ -273,6 +273,7 @@ export type ChatMessage = {
   session_id: number
   role: ChatRole
   content: string
+  assistant_payload?: AssistantAnswer | null
   content_path: string | null
   model_name: string | null
   tokens_used: number | null

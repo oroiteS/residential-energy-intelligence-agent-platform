@@ -43,11 +43,11 @@ import {
   extractApiErrorMessage,
   exportDatasetReport,
   fetchAdvices,
+  fetchClassifications,
   fetchDatasetAnalysis,
   fetchDatasetDetail,
   fetchForecastDetail,
   fetchForecasts,
-  fetchLatestClassification,
   fetchReports,
   generateAdvices,
   runClassification,
@@ -75,6 +75,8 @@ import {
   formatPeriodRange,
   formatTime,
 } from '@/utils/formatters'
+
+const maxVisibleForecastDays = 7
 
 function buildDayWindow(timeEnd: string | null | undefined, dayOffset = 0) {
   const baseDate = timeEnd ? new Date(timeEnd) : new Date('2014-12-04T23:45:00+08:00')
@@ -114,10 +116,18 @@ function getForecastDayOffset(
     (dayStartForecast.getTime() - dayStartDataset.getTime()) / (24 * 60 * 60 * 1000),
   )
 
-  if (dayOffset < 1 || dayOffset > 3) {
+  if (dayOffset < 1 || dayOffset > maxVisibleForecastDays) {
     return null
   }
   return dayOffset
+}
+
+function formatClassificationDay(item: ClassificationResult) {
+  const source = item.window_start || item.created_at
+  if (!source) {
+    return '未知日期'
+  }
+  return formatDateTime(source).slice(0, 10)
 }
 
 function getForecastDayLabel(
@@ -266,6 +276,7 @@ export function DatasetDetailPage() {
   const [detail, setDetail] = useState<DatasetDetailPayload | null>(null)
   const [analysis, setAnalysis] = useState<AnalysisPayload | null>(null)
   const [classification, setClassification] = useState<ClassificationResult | null>(null)
+  const [classificationHistory, setClassificationHistory] = useState<ClassificationResult[]>([])
   const [advices, setAdvices] = useState<AdviceDetail[]>([])
   const [reports, setReports] = useState<ReportRecord[]>([])
   const [forecasts, setForecasts] = useState<ForecastRecord[]>([])
@@ -290,6 +301,7 @@ export function DatasetDetailPage() {
       if (detailResult.dataset.status !== 'ready') {
         setAnalysis(null)
         setClassification(null)
+        setClassificationHistory([])
         setAdvices([])
         setReports([])
         setForecasts([])
@@ -300,20 +312,21 @@ export function DatasetDetailPage() {
 
       const [
         analysisResult,
-        classificationResult,
+        classificationResults,
         adviceResult,
         reportResult,
         forecastResult,
       ] = await Promise.all([
         fetchDatasetAnalysis(datasetId),
-        fetchLatestClassification(datasetId),
+        fetchClassifications(datasetId),
         fetchAdvices(datasetId),
         fetchReports(datasetId),
         fetchForecasts(datasetId),
       ])
 
       setAnalysis(analysisResult)
-      setClassification(classificationResult)
+      setClassification(classificationResults[0] ?? null)
+      setClassificationHistory(classificationResults)
       setAdvices(adviceResult)
       setReports(reportResult)
       setForecasts(forecastResult)
@@ -436,6 +449,10 @@ export function DatasetDetailPage() {
   }
 
   const probabilityEntries = Object.entries(classification?.probabilities ?? {})
+  const classificationItems = classificationHistory.map((item) => ({
+    ...item,
+    dayLabel: formatClassificationDay(item),
+  }))
   const adviceItems = advices.flatMap((item) =>
     item.content.items.map((contentItem, index) => ({
       key: `${item.advice.id}-${index}`,
@@ -469,8 +486,10 @@ export function DatasetDetailPage() {
   const handleRunClassification = async () => {
     setClassificationActionLoading(true)
     try {
-      const result = await runClassification(datasetId)
-      setClassification(result)
+      await runClassification(datasetId)
+      const results = await fetchClassifications(datasetId)
+      setClassification(results[0] ?? null)
+      setClassificationHistory(results)
       message.success('行为分类结果已刷新。')
     } catch (error) {
       message.error(extractApiErrorMessage(error, '生成分类结果失败，请稍后重试。'))
@@ -733,6 +752,9 @@ export function DatasetDetailPage() {
                           <Typography.Text strong>
                             最高置信度：{formatPercent(classification.confidence)}
                           </Typography.Text>
+                          <Typography.Text type="secondary">
+                            当前摘要对应日期：{formatClassificationDay(classification)}
+                          </Typography.Text>
                           <div className="probability-list">
                             {probabilityEntries.map(([label, probability]) => (
                               <div key={label} className="probability-list__item">
@@ -745,6 +767,36 @@ export function DatasetDetailPage() {
                               </div>
                             ))}
                           </div>
+                          <List
+                            size="small"
+                            header={<Typography.Text strong>按日分类历史</Typography.Text>}
+                            dataSource={classificationItems}
+                            locale={{ emptyText: '暂无按日分类记录' }}
+                            renderItem={(item) => (
+                              <List.Item key={item.id}>
+                                <Space
+                                  align="start"
+                                  size={12}
+                                  style={{ justifyContent: 'space-between', width: '100%' }}
+                                >
+                                  <div>
+                                    <Typography.Text strong>{item.dayLabel}</Typography.Text>
+                                    <br />
+                                    <Typography.Text type="secondary">
+                                      {item.explanation || '暂无分类说明'}
+                                    </Typography.Text>
+                                  </div>
+                                  <div style={{ textAlign: 'right' }}>
+                                    <Tag>{item.label_display_name ?? classificationLabelMap[item.predicted_label]}</Tag>
+                                    <br />
+                                    <Typography.Text type="secondary">
+                                      置信度 {formatPercent(item.confidence)}
+                                    </Typography.Text>
+                                  </div>
+                                </Space>
+                              </List.Item>
+                            )}
+                          />
                         </Space>
                       ) : (
                         <Empty description="暂无分类结果" />
@@ -797,17 +849,16 @@ export function DatasetDetailPage() {
               <div className="page-stack">
                 <SectionCard
                   title="预测操作台"
-                  subtitle="基于最近 7 天窗口，递推预测未来第 1 到第 3 天。"
+                  subtitle={`基于最近 7 天窗口，递推预测未来第 1 到第 ${maxVisibleForecastDays} 天。`}
                   extra={
                     <Space wrap>
                       <Select
                         value={selectedFutureDay}
                         style={{ width: 160 }}
-                        options={[
-                          { label: '未来第 1 天', value: 1 },
-                          { label: '未来第 2 天', value: 2 },
-                          { label: '未来第 3 天', value: 3 },
-                        ]}
+                        options={Array.from({ length: maxVisibleForecastDays }, (_, index) => ({
+                          label: `未来第 ${index + 1} 天`,
+                          value: index + 1,
+                        }))}
                         onChange={(value: number) => setSelectedFutureDay(value)}
                       />
                       <Select
