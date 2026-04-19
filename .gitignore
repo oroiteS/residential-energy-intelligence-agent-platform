@@ -74,6 +74,7 @@ models/data/processed/
 models/data/raw/
 
 # docx
+doc/
 
 *.zip
 *.tar.gz
