@@ -74,8 +74,6 @@ models/data/processed/
 models/data/raw/
 
 # docx
-*/*.docx
-*/*.docs
 
 *.zip
 *.tar.gz
@@ -83,3 +81,4 @@ models/data/raw/
 .qoder/
 .cache/
 models_test/
+*.code-workspace
