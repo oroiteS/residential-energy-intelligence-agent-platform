@@ -75,6 +75,7 @@ models/data/raw/
 
 # docx
 doc/
+doc-example/
 
 *.zip
 *.tar.gz
