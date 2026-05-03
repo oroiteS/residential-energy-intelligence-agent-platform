@@ -11,12 +11,14 @@ type TrendChartProps = {
   data: TrendPoint[]
   lineColor?: string
   unit?: string
+  yAxisName?: string
 }
 
 export function TrendChart({
   data,
   lineColor = '#5d6d5e',
   unit = 'kWh',
+  yAxisName,
 }: TrendChartProps) {
   if (data.length === 0) {
     return <Empty description="暂无曲线数据" />
@@ -50,6 +52,11 @@ export function TrendChart({
     },
     yAxis: {
       type: 'value',
+      name: yAxisName ?? unit,
+      nameTextStyle: {
+        color: '#6c7468',
+        padding: [0, 0, 4, 0],
+      },
       axisLabel: {
         color: '#6c7468',
       },

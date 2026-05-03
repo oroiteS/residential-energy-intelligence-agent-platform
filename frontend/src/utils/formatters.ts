@@ -31,6 +31,10 @@ export function formatDateTime(value: string | null | undefined) {
   }).format(new Date(value))
 }
 
+function isValidDate(value: Date) {
+  return !Number.isNaN(value.getTime())
+}
+
 export function formatTime(value: string | null | undefined) {
   if (!value) {
     return '--'
@@ -48,7 +52,20 @@ export function formatPeriodRange(value: string) {
     return value
   }
 
+  const startDate = new Date(start)
+  const endDate = new Date(end)
+  if (!isValidDate(startDate) || !isValidDate(endDate)) {
+    return value
+  }
+
   return `${formatDateTime(start)} - ${formatTime(end)}`
+}
+
+export function humanizeDateRanges(value: string) {
+  const isoRangePattern =
+    /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/g
+
+  return value.replace(isoRangePattern, (range) => formatPeriodRange(range))
 }
 
 export function formatFileSize(value: number) {

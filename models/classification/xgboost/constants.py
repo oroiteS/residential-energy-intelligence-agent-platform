@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 SEQUENCE_LENGTH = 96
+CLASS_LABEL_NAMES = (
+    "afternoon_peak",
+    "all_day_low",
+    "night_peak",
+    "morning_peak",
+)
 
 BLOCK_SIZE = 12
 NUM_BLOCKS = SEQUENCE_LENGTH // BLOCK_SIZE
@@ -59,6 +65,7 @@ TABULAR_FEATURE_NAMES = (
 __all__ = [
     "AGGREGATE_COLUMNS",
     "BLOCK_SIZE",
+    "CLASS_LABEL_NAMES",
     "NUM_BLOCKS",
     "SEQUENCE_LENGTH",
     "TABULAR_FEATURE_NAMES",

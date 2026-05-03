@@ -1,19 +1,8 @@
--- ============================================================
--- 居民用电分析与节能建议系统 — MySQL 8.0 建表脚本
--- 数据库：resident
--- 说明：
--- 1. 本脚本只负责数据库结构与基础系统配置初始化
--- 2. 采用“元数据入库、大对象落文件”的设计
--- ============================================================
-
 USE `resident`;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
--- -----------------------------------------------------------
--- 1. system_config — 系统配置（KV 存储）
--- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `system_config` (
     `config_key`   VARCHAR(64)  NOT NULL COMMENT '配置键',
     `config_value` TEXT         NOT NULL COMMENT '配置值',
@@ -37,9 +26,6 @@ ON DUPLICATE KEY UPDATE
     `config_value` = VALUES(`config_value`),
     `description` = VALUES(`description`);
 
--- -----------------------------------------------------------
--- 2. datasets — 数据集
--- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `datasets` (
     `id`                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `name`                VARCHAR(128)    NOT NULL COMMENT '数据集名称',
@@ -74,9 +60,6 @@ CREATE TABLE IF NOT EXISTS `datasets` (
   COLLATE=utf8mb4_unicode_ci
   COMMENT='数据集表';
 
--- -----------------------------------------------------------
--- 3. analysis_results — 统计分析结果
--- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `analysis_results` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `dataset_id`    BIGINT UNSIGNED NOT NULL COMMENT '关联数据集',
@@ -123,15 +106,12 @@ CREATE TABLE IF NOT EXISTS `analysis_results` (
   COLLATE=utf8mb4_unicode_ci
   COMMENT='统计分析结果表';
 
--- -----------------------------------------------------------
--- 4. classification_results — 行为分类结果
--- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `classification_results` (
     `id`              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `dataset_id`      BIGINT UNSIGNED NOT NULL COMMENT '关联数据集',
     `model_type`      ENUM('xgboost')
                       NOT NULL COMMENT '模型架构',
-    `predicted_label` VARCHAR(32)     NOT NULL COMMENT '预测标签：day_high_night_low/day_low_night_high/all_day_high/all_day_low',
+    `predicted_label` VARCHAR(32)     NOT NULL COMMENT '预测标签：afternoon_peak/night_peak/morning_peak/all_day_low',
     `confidence`      DECIMAL(5,4)    DEFAULT NULL COMMENT '最高类别置信度',
     `probabilities`   JSON            DEFAULT NULL COMMENT '4 类稳定标签的概率分布',
     `explanation`     TEXT            DEFAULT NULL COMMENT '基于 day_mean/night_mean/full_mean 的分类依据说明',
@@ -157,23 +137,6 @@ CREATE TABLE IF NOT EXISTS `classification_results` (
   COLLATE=utf8mb4_unicode_ci
   COMMENT='行为分类结果表';
 
--- -----------------------------------------------------------
--- classification_results 历史库升级说明
--- 仅用于已经存在旧表且 model_type 仍为 tcn 的场景
--- -----------------------------------------------------------
--- ALTER TABLE `classification_results`
--- MODIFY COLUMN `model_type` ENUM('tcn','xgboost') NOT NULL COMMENT '模型架构';
---
--- UPDATE `classification_results`
--- SET `model_type` = 'xgboost'
--- WHERE `model_type` = 'tcn';
---
--- ALTER TABLE `classification_results`
--- MODIFY COLUMN `model_type` ENUM('xgboost') NOT NULL COMMENT '模型架构';
-
--- -----------------------------------------------------------
--- 5. forecast_results — 时序预测结果
--- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `forecast_results` (
     `id`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `dataset_id`     BIGINT UNSIGNED NOT NULL COMMENT '关联数据集',
@@ -183,7 +146,7 @@ CREATE TABLE IF NOT EXISTS `forecast_results` (
     `forecast_end`   DATETIME        NOT NULL COMMENT '预测结束时间',
     `granularity`    ENUM('15min','hourly','daily')
                      NOT NULL DEFAULT '15min' COMMENT '预测粒度',
-    `summary`        JSON            DEFAULT NULL COMMENT '预测摘要，供前端与智能体快速复用',
+    `summary`        JSON            DEFAULT NULL COMMENT '预测摘要，包含负荷统计、风险标签和基于预测曲线的 XGBoost 未来分类',
     `detail_path`    VARCHAR(512)    NOT NULL COMMENT '预测值序列文件路径',
     `metrics`        JSON            DEFAULT NULL COMMENT '评估指标（当前统一使用 mae/rmse/smape/wape）',
     `created_at`     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -200,9 +163,6 @@ CREATE TABLE IF NOT EXISTS `forecast_results` (
   COLLATE=utf8mb4_unicode_ci
   COMMENT='时序预测结果表';
 
--- -----------------------------------------------------------
--- 6. chat_sessions — 聊天会话
--- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `chat_sessions` (
     `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `dataset_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '关联数据集，空表示通用对话',
@@ -220,9 +180,6 @@ CREATE TABLE IF NOT EXISTS `chat_sessions` (
   COLLATE=utf8mb4_unicode_ci
   COMMENT='聊天会话表';
 
--- -----------------------------------------------------------
--- 7. chat_messages — 聊天消息
--- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `chat_messages` (
     `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `session_id`   BIGINT UNSIGNED NOT NULL COMMENT '关联会话',
@@ -244,9 +201,6 @@ CREATE TABLE IF NOT EXISTS `chat_messages` (
   COLLATE=utf8mb4_unicode_ci
   COMMENT='聊天消息表';
 
--- -----------------------------------------------------------
--- 8. energy_advices — 节能建议
--- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `energy_advices` (
     `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `dataset_id`        BIGINT UNSIGNED NOT NULL COMMENT '关联数据集',
@@ -268,9 +222,6 @@ CREATE TABLE IF NOT EXISTS `energy_advices` (
   COLLATE=utf8mb4_unicode_ci
   COMMENT='节能建议表';
 
--- -----------------------------------------------------------
--- 9. reports — 导出报告
--- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `reports` (
     `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `dataset_id`  BIGINT UNSIGNED NOT NULL COMMENT '关联数据集',

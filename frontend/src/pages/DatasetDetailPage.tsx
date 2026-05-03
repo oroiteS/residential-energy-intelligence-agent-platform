@@ -657,22 +657,24 @@ export function DatasetDetailPage() {
 
                 <Row gutter={[16, 16]}>
                   <Col xs={24} xl={12}>
-                    <SectionCard title="按日趋势" subtitle="查看每日用电变化节奏">
+                    <SectionCard title="按日趋势" subtitle="每日总用电量趋势，单位 kWh">
                       <TrendChart
                         data={analysis.charts.daily_trend.map((item) => ({
                           label: item.date.slice(5),
                           value: item.kwh,
                         }))}
                         lineColor="#9b876d"
+                        unit="kWh"
                       />
                     </SectionCard>
                   </Col>
                   <Col xs={24} xl={12}>
-                    <SectionCard title="按周趋势" subtitle="用于观察跨周波动与整体走势">
+                    <SectionCard title="按周趋势" subtitle="每周总用电量趋势，单位 kWh">
                       {weeklyTrendChartData.length >= 2 ? (
                         <TrendChart
                           data={weeklyTrendChartData}
                           lineColor="#5d6d5e"
+                          unit="kWh"
                         />
                       ) : (
                         <Empty description="样本不足两周，暂不展示按周趋势" />
@@ -680,7 +682,7 @@ export function DatasetDetailPage() {
                     </SectionCard>
                   </Col>
                   <Col xs={24} xl={14}>
-                    <SectionCard title="典型日曲线" subtitle="24 小时平均负荷曲线">
+                    <SectionCard title="典型日曲线" subtitle="跨样本日按小时平均负荷曲线，单位 W">
                       <TrendChart
                         data={analysis.charts.typical_day_curve.map((item) => ({
                           label: `${String(item.hour).padStart(2, '0')}:00`,
@@ -689,6 +691,9 @@ export function DatasetDetailPage() {
                         lineColor="#8c7b62"
                         unit="W"
                       />
+                      <Typography.Text type="secondary">
+                        该曲线是所有日期在同一小时负荷的平均值；按小时聚合后会比 15 分钟原始曲线更平滑。
+                      </Typography.Text>
                     </SectionCard>
                   </Col>
                   <Col xs={24} xl={10}>
@@ -903,8 +908,22 @@ export function DatasetDetailPage() {
                       </Col>
                       <Col xs={24} md={12} xl={6}>
                         <MetricCard
-                          label="风险标签"
-                          value={String(selectedForecast.summary.risk_flags.length)}
+                          label="预测类别"
+                          value={
+                            selectedForecast.summary.forecast_classification
+                              ? selectedForecast.summary.forecast_classification.label_display_name ??
+                                classificationLabelMap[
+                                  selectedForecast.summary.forecast_classification.predicted_label
+                                ]
+                              : '--'
+                          }
+                          hint={
+                            selectedForecast.summary.forecast_classification
+                              ? `置信度 ${formatPercent(
+                                  selectedForecast.summary.forecast_classification.confidence,
+                                )}`
+                              : '待生成未来分类'
+                          }
                           accent="olive"
                         />
                       </Col>
@@ -977,7 +996,7 @@ export function DatasetDetailPage() {
 
                 <Row gutter={[16, 16]}>
                   <Col xs={24}>
-                    <SectionCard title="预测摘要" subtitle="汇总关键时段与风险标签。">
+                    <SectionCard title="预测摘要" subtitle="汇总关键时段、未来分类与风险提示。">
                       {selectedForecast ? (
                         <Descriptions column={1} size="small">
                           <Descriptions.Item label="预测天数">
@@ -1004,7 +1023,25 @@ export function DatasetDetailPage() {
                           <Descriptions.Item label="预测总用电量">
                             {formatNumber(getPredictedTotalKwh(selectedForecast.summary))} kWh
                           </Descriptions.Item>
-                          <Descriptions.Item label="风险标签">
+                          <Descriptions.Item label="预测分类">
+                            {selectedForecast.summary.forecast_classification ? (
+                              <Space wrap>
+                                <Tag className="tone-tag tone-tag--accent">
+                                  {selectedForecast.summary.forecast_classification.label_display_name ??
+                                    classificationLabelMap[
+                                      selectedForecast.summary.forecast_classification.predicted_label
+                                    ]}
+                                </Tag>
+                                <Typography.Text type="secondary">
+                                  XGBoost 基于预测日曲线判断，置信度{' '}
+                                  {formatPercent(selectedForecast.summary.forecast_classification.confidence)}
+                                </Typography.Text>
+                              </Space>
+                            ) : (
+                              '--'
+                            )}
+                          </Descriptions.Item>
+                          <Descriptions.Item label="风险提示">
                             {selectedForecast.summary.risk_flags.length ? (
                               <Space wrap>
                                 {selectedForecast.summary.risk_flags.map((flag) => (

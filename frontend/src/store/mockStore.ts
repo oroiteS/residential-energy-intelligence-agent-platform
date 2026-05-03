@@ -163,7 +163,7 @@ export const useMockStore = create<MockStore>((set, get) => ({
         ...state.chatSessions,
         [datasetId]: (state.chatSessions[datasetId] ?? []).map((item) =>
           item.id === sessionId
-            ? { ...item, updated_at: payload.answer.created_at }
+            ? { ...item, updated_at: payload.answer.created_at ?? new Date().toISOString() }
             : item,
         ),
       },

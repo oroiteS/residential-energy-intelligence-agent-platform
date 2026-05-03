@@ -47,15 +47,35 @@ import type {
   ChatSession,
   DatasetSummary,
 } from '@/types/domain'
-import { formatDateTime } from '@/utils/formatters'
+import { formatDateTime, humanizeDateRanges } from '@/utils/formatters'
 
 const { TextArea } = Input
 
-function renderCitationValue(value: AssistantAnswer['citations'][number]['value']) {
+function renderCitationValue(value: AssistantAnswer['citations'][number]['value']): string {
   if (Array.isArray(value)) {
-    return value.map((item) => String(item)).join(' / ')
+    return value.map((item) => renderCitationValue(item)).join(' / ')
   }
-  return String(value)
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>
+    const label = typeof record.label_display_name === 'string'
+      ? record.label_display_name
+      : typeof record.predicted_label === 'string'
+        ? record.predicted_label
+        : ''
+    const date = typeof record.date === 'string' ? record.date : ''
+    const dayOffset = typeof record.day_offset === 'number' ? `未来第 ${record.day_offset} 天` : ''
+    const explanation = typeof record.explanation === 'string' ? record.explanation : ''
+    const parts = [dayOffset || date, label, explanation].filter(Boolean)
+    if (parts.length > 0) {
+      return parts.join('，')
+    }
+    return JSON.stringify(value)
+  }
+  return humanizeDateRanges(String(value))
+}
+
+function renderActionText(value: string) {
+  return humanizeDateRanges(value)
 }
 
 function isAssistantAnswerPayload(value: unknown): value is AssistantAnswer {
@@ -208,7 +228,7 @@ function AssistantResponsePanel({
                   <span className="assistant-action-item__index">
                     {String(index + 1).padStart(2, '0')}
                   </span>
-                  <Typography.Text>{item}</Typography.Text>
+                  <Typography.Text>{renderActionText(item)}</Typography.Text>
                 </div>
               </List.Item>
             )}

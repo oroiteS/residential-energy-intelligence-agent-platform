@@ -35,6 +35,8 @@ const http = axios.create({
   timeout: 10000,
 })
 
+const assistantRequestTimeoutMs = 200000
+
 export const isMockMode =
   import.meta.env.DEV && import.meta.env.VITE_USE_MOCK !== 'false'
 
@@ -56,6 +58,10 @@ function downloadBlob(filename: string, content: string) {
 
 export function extractApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {
+    if (error.code === 'ECONNABORTED') {
+      return '请求处理时间较长，前端已超时。请稍后重试或检查模型服务日志。'
+    }
+
     const responseMessage = error.response?.data?.message
     if (typeof responseMessage === 'string' && responseMessage.trim()) {
       return responseMessage.trim()
@@ -293,7 +299,7 @@ export async function exportDatasetReport(
   const { data } = await http.post<ApiEnvelope<{ report: ReportRecord }>>(
     `/datasets/${datasetId}/reports/export`,
     { report_type: reportType },
-    { timeout: 180000 },
+    { timeout: 360000 },
   )
   return data.data.report
 }
@@ -457,7 +463,7 @@ export async function askAssistant(input: {
   }
 
   const { data } = await http.post<ApiEnvelope<AssistantAnswer>>('/agent/ask', input, {
-    timeout: 70000,
+    timeout: assistantRequestTimeoutMs,
   })
   return data.data
 }

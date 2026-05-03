@@ -84,3 +84,7 @@ doc-example/
 .cache/
 models_test/
 *.code-workspace
+
+# test
+test/
+*/test

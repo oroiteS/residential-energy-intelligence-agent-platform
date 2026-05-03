@@ -266,13 +266,13 @@ export const demoClassifications: Record<number, ClassificationResult> = {
     dataset_id: 1,
     model_type: 'xgboost',
     schema_version: 'v1',
-    predicted_label: 'day_low_night_high',
+    predicted_label: 'night_peak',
     confidence: 0.83,
     label_display_name: '晚上高峰型',
     probabilities: {
       morning_peak: 0.07,
       afternoon_peak: 0.06,
-      day_low_night_high: 0.83,
+      night_peak: 0.83,
       all_day_low: 0.04,
     },
     explanation: '夜间均值显著高于白天均值，且 night_mean/day_mean = 1.46。',
@@ -291,7 +291,7 @@ export const demoClassifications: Record<number, ClassificationResult> = {
     probabilities: {
       morning_peak: 0.06,
       afternoon_peak: 0.78,
-      day_low_night_high: 0.11,
+      night_peak: 0.11,
       all_day_low: 0.05,
     },
     explanation: '白天时段平均负荷明显高于夜间，day_mean/night_mean = 1.28。',
@@ -658,7 +658,7 @@ export function buildMockAssistantExchange(
       {
         key: 'predicted_label',
         label: '行为类型',
-        value: datasetId === 1 ? 'day_low_night_high' : 'afternoon_peak',
+        value: datasetId === 1 ? 'night_peak' : 'afternoon_peak',
       },
       {
         key: 'risk_flags',
@@ -675,19 +675,20 @@ export function buildMockAssistantExchange(
     created_at: '2026-04-01T10:52:00+08:00',
     intent: datasetId === 1 ? 'risk' : 'advice',
     confidence_level: datasetId === 1 ? 'medium' : 'high',
-    missing_information:
-      datasetId === 1
-        ? [
+	    missing_information:
+	      datasetId === 1
+	        ? [
             {
               key: 'comfort_priority',
               question: '你更偏向节能优先，还是舒适度优先？',
               reason: '晚间热水和持续负荷调整会影响舒适度，需要先确认偏好。',
             },
           ]
-        : [],
-  }
+	        : [],
+	  }
+	const createdAt = answer.created_at ?? new Date().toISOString()
 
-  return {
+	  return {
     answer,
     messages: [
       {
@@ -705,11 +706,11 @@ export function buildMockAssistantExchange(
         session_id: sessionId,
         role: 'assistant',
         content: answer.answer,
-        content_path: null,
-        model_name: 'deepseek-chat',
-        tokens_used: 486,
-        created_at: answer.created_at,
-      },
+	        content_path: null,
+	        model_name: 'deepseek-chat',
+	        tokens_used: 486,
+	        created_at: createdAt,
+	      },
     ],
   }
 }

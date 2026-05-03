@@ -19,9 +19,32 @@ import {
   fetchChatSessions,
 } from '@/services/dashboard'
 import type { AssistantAnswer, ChatMessage, ChatSession } from '@/types/domain'
-import { formatDateTime } from '@/utils/formatters'
+import { formatDateTime, humanizeDateRanges } from '@/utils/formatters'
 
 const { TextArea } = Input
+
+function renderCitationValue(value: AssistantAnswer['citations'][number]['value']): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => renderCitationValue(item)).join(' / ')
+  }
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>
+    const label = typeof record.label_display_name === 'string'
+      ? record.label_display_name
+      : typeof record.predicted_label === 'string'
+        ? record.predicted_label
+        : ''
+    const date = typeof record.date === 'string' ? record.date : ''
+    const dayOffset = typeof record.day_offset === 'number' ? `未来第 ${record.day_offset} 天` : ''
+    const explanation = typeof record.explanation === 'string' ? record.explanation : ''
+    const parts = [dayOffset || date, label, explanation].filter(Boolean)
+    if (parts.length > 0) {
+      return parts.join('，')
+    }
+    return JSON.stringify(value)
+  }
+  return humanizeDateRanges(String(value))
+}
 
 type AskAssistantModalProps = {
   datasetId: number
@@ -309,10 +332,7 @@ export function AskAssistantModal({
               <Space wrap>
                 {answer.citations.map((citation) => (
                   <Tag key={citation.key} color="blue">
-                    {citation.label}：
-                    {Array.isArray(citation.value)
-                      ? citation.value.join(' / ')
-                      : String(citation.value)}
+                    {citation.label}：{renderCitationValue(citation.value)}
                   </Tag>
                 ))}
               </Space>
@@ -324,7 +344,7 @@ export function AskAssistantModal({
                 size="small"
                 bordered
                 dataSource={answer.actions}
-                renderItem={(item) => <List.Item>{item}</List.Item>}
+                renderItem={(item) => <List.Item>{humanizeDateRanges(item)}</List.Item>}
               />
             </div>
           ) : null}

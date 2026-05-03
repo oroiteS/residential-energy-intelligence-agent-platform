@@ -4,7 +4,7 @@ export type ClassificationModelType = 'xgboost'
 export type PredictedLabel =
   | 'morning_peak'
   | 'afternoon_peak'
-  | 'day_low_night_high'
+  | 'night_peak'
   | 'all_day_low'
 export type AdviceType = 'rule' | 'llm'
 export type ReportType = 'excel' | 'html' | 'pdf'
@@ -184,6 +184,18 @@ export type ClassificationResult = {
   created_at: string
 }
 
+export type ForecastClassificationSummary = {
+  schema_version?: 'v1'
+  model_type: ClassificationModelType
+  predicted_label: PredictedLabel
+  label_display_name?: string
+  confidence: number
+  probabilities: ClassificationProbabilities
+  window_start: string | null
+  window_end: string | null
+  source: string
+}
+
 export type ForecastSummary = {
   forecast_start: string
   forecast_end: string
@@ -199,6 +211,7 @@ export type ForecastSummary = {
   predicted_valley_ratio?: number
   predicted_flat_ratio?: number
   risk_flags: RiskFlag[]
+  forecast_classification?: ForecastClassificationSummary
   confidence_hint?: AgentConfidenceLevel
 }
 

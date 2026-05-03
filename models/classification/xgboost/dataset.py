@@ -12,6 +12,7 @@ import pandas as pd
 from classification.xgboost.constants import (
     AGGREGATE_COLUMNS,
     BLOCK_SIZE,
+    CLASS_LABEL_NAMES,
     NUM_BLOCKS,
     TABULAR_FEATURE_NAMES,
 )
@@ -43,10 +44,19 @@ class LabelVocabulary:
 def infer_label_vocabulary(data_frame: pd.DataFrame) -> LabelVocabulary:
     if "label_name" not in data_frame.columns:
         raise ValueError("训练数据缺少 label_name 字段，无法推断标签体系")
-    label_names = sorted({str(value).strip() for value in data_frame["label_name"].tolist()})
-    if not label_names:
+    observed_labels = {str(value).strip() for value in data_frame["label_name"].tolist()}
+    if not observed_labels:
         raise ValueError("训练数据中的标签集合为空")
-    return LabelVocabulary(label_names=label_names)
+
+    expected_labels = set(CLASS_LABEL_NAMES)
+    missing_labels = [label_name for label_name in CLASS_LABEL_NAMES if label_name not in observed_labels]
+    unexpected_labels = sorted(observed_labels.difference(expected_labels))
+    if missing_labels or unexpected_labels:
+        raise ValueError(
+            "训练数据标签集合与固定标签体系不一致："
+            f"missing={missing_labels} unexpected={unexpected_labels}"
+        )
+    return LabelVocabulary(label_names=list(CLASS_LABEL_NAMES))
 
 
 def _safe_ratio(numerator: float, denominator: float, epsilon: float = 1e-6) -> float:

@@ -1,237 +1,72 @@
-# 居民用电分析与节能建议智能体系统
+# 居民用电分析与节能建议系统
 
-面向毕业设计的本地化居民用电分析系统，覆盖数据导入、统计分析、
-行为分类、负荷预测、节能建议与问答展示。
+这是一个面向毕业设计场景的本地化居民用电分析项目，覆盖数据预处理、
+分类与预测训练、在线推理、节能问答、报告导出和实时演示。
 
-当前仓库已经包含可运行的五个核心部分：
+当前仓库中可直接关注的核心目录：
 
-- `frontend/`：React + Vite 前端仪表盘
-- `backend/`：Go + Gin 主服务
-- `models_agent/`：Robyn 推理与节能问答服务
+- `frontend/`：React + Vite 前端工作台
+- `backend/`：Go + Gin 主 API 服务
+- `models_agent/`：Python 推理与智能体服务
 - `models/`：离线数据处理、分类训练、预测训练
-- `live/`：独立实时演示模块，循环播放测试集连续窗口样本并实时推送展示
-
-当前报告导出支持：
-
-- `PDF`：由智能体先整理摘要正文，再由后端生成正式报告文件
-
-## 文档导航
-
-`doc/` 已按“总览 / 接口 / 数据库 / 建模”收敛，建议按下面顺序阅读：
-
-1. `doc/README.md`：文档索引与边界说明
-2. `doc/chinese_project.md`：项目范围、模块职责、部署口径
-3. `doc/api_design.md`：前后端与模型服务接口契约
-4. `doc/database_design.md`：数据库设计
-5. `doc/model_data_pipeline.md`：训练数据流水线
+- `live/`：独立实时演示模块
 
 说明：
 
-- `doc/schema.sql` 为 MySQL 初始化脚本
+- `doc/`、`doc-example/`、`mysql_data/`、`models/data/raw/`、
+  `models/data/processed/` 等目录已被 `.gitignore` 排除，不作为当前 README
+  的维护范围
+- 仓库根目录当前没有统一的 `.env.example`，环境变量示例分散在各子模块内
 
-## 仓库结构
+## 项目结构
 
 ```text
-backend/       Go 主服务
-doc/           项目文档
-frontend/      React 前端
-live/          独立实时演示模块
-models/        离线训练与数据处理
-models_agent/  Python 推理与智能体服务
-docker-compose.yml
-docker-compose.cuda.yml
-scripts/deploy/
+.
+├── backend/        Go 主服务
+├── frontend/       React 前端
+├── live/           实时演示服务
+├── models/         离线建模与数据流水线
+├── models_agent/   Python 推理与问答服务
+├── docker-compose.yml
+├── schema.sql
+└── README.md
 ```
 
-## 脚本化启动
+## 模块关系
 
-现在默认推荐纯本地进程启动，不再依赖 `docker compose` 拉起
-`backend / frontend / models_agent / live`。你只需要自行准备一个可用的
-`MySQL`，其余服务可由脚本统一启动。
+典型联调链路如下：
 
-启动前建议先准备根目录环境变量：
+1. `models/` 生成训练数据并训练分类/预测模型
+2. 训练得到的权重同步到 `models_agent/checkpoints/`
+3. `models_agent/` 提供分类、预测、问答和 PDF 渲染接口
+4. `backend/` 负责数据导入、分析编排、结果存储、报告导出
+5. `frontend/` 调用 `backend/`，并单独连接 `live/` 做实时展示
 
-```bash
-cp .env.example .env
-```
+## 快速启动
 
-至少确认以下内容：
-
-- `MYSQL_DSN` 指向你本机已启动的 MySQL
-- `LLM_*` 已按需配置
-- 如需修改端口，可同步调整对应服务环境变量
-
-### Apple Silicon + MPS
-
-```bash
-./scripts/deploy/start-apple-mps.sh
-```
-
-说明：
-
-- 等价于执行 `./scripts/deploy/start-local.sh`
-- 会本地启动 `models_agent / backend / frontend / live`
-- 所有日志写入 `.run/logs/`
-
-### Linux + CUDA
-
-```bash
-./scripts/deploy/start-linux-cuda.sh
-```
-
-说明：
-
-- 等价于执行 `./scripts/deploy/start-local.sh`
-- 需要宿主机本地 Python / Go / pnpm 环境已可用
-
-### 通用 CPU
-
-```bash
-./scripts/deploy/start-cpu.sh
-```
-
-### 统一本地启动
-
-```bash
-./scripts/deploy/start-local.sh
-```
-
-### 统一停止
-
-```bash
-./scripts/deploy/stop.sh
-```
-
-说明：
-
-- 等价于执行 `./scripts/deploy/stop-local.sh`
-- 会停止 `frontend / live / backend / models_agent`
-
-## Docker 直接命令
-
-如果你仍然想直接使用 `docker compose`，仓库中仍保留了相关配置；
-但当前默认推荐使用上面的本地脚本模式。
-
-默认编排会启动完整 CPU 栈：
-
-- `db`：MySQL 8
-- `models-agent`：Python 推理与智能体服务
-- `backend`：Go API
-- `frontend`：Nginx 托管前端并反向代理 `/api`
-- `live`：独立实时演示服务，提供循环连续窗口样本播放页面与 SSE 实时流
-
-如需配置 LLM 或切换 Python 服务地址，先准备根目录环境变量文件：
-
-```bash
-cp .env.example .env
-```
-
-如果你的网络环境无法直接访问 Docker Hub，建议同时在 `.env` 中设置镜像前缀：
-
-```bash
-DOCKER_IMAGE_PREFIX=docker.m.daocloud.io/
-MYSQL_IMAGE=docker.m.daocloud.io/mysql:8.0
-```
-
-说明：
-
-- `DOCKER_IMAGE_PREFIX` 会作用于 `golang / node / nginx / python / alpine` 等构建基础镜像
-- `MYSQL_IMAGE` 单独覆盖数据库镜像
-- 如果你有自己的企业镜像仓库，也可以替换为对应地址
-
-启动：
-
-```bash
-docker compose up -d --build
-```
-
-访问地址：
-
-- 前端：<http://127.0.0.1:3000>
-- 后端健康检查：<http://127.0.0.1:8080/api/v1/health>
-- Python 服务健康检查：<http://127.0.0.1:8001/internal/model/v1/health>
-- 实时演示：<http://127.0.0.1:8090>
-- MySQL：`127.0.0.1:3306`
-
-停止：
-
-```bash
-docker compose down
-```
-
-清理并删除数据卷：
-
-```bash
-docker compose down -v
-```
-
-## CUDA 部署
-
-如果宿主机已安装 `NVIDIA Container Toolkit`，可以叠加 CUDA 覆盖配置：
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
-```
-
-该模式会为 `models-agent` 申请 `NVIDIA GPU`，推理设备优先级为：
-
-```text
-cuda -> mps -> cpu
-```
-
-## MPS 说明
-
-`models_agent` 代码已经支持 `MPS` 检测与推理，但 `MPS` 属于 macOS 的
-Metal 能力，标准 Linux 容器无法直接透传该能力。因此：
-
-- `Docker` 全栈部署支持 `CPU` 与 `CUDA`
-- `Apple Silicon + MPS` 需要将 `models_agent` 在宿主机本地启动
-- 其余 `db / backend / frontend / live` 仍可继续使用 Docker
-
-宿主机 MPS 启动方式：
+### 1. 启动 Python 推理服务
 
 ```bash
 cd models_agent
+cp .env.example .env
 uv sync
-APP_HOST=0.0.0.0 APP_PORT=8001 uv run python main.py
+uv run python main.py
 ```
 
-随后单独启动其余服务：
+默认地址：`http://127.0.0.1:8001`
+
+### 2. 启动 Go 后端
 
 ```bash
-PYTHON_SERVICE_BASE_URL=http://host.docker.internal:8001 \
-docker compose up -d db backend frontend live
+cd backend
+cp .env.example .env
+go run ./cmd/api
 ```
 
-如果这里依然报 `auth.docker.io/token`、`failed to authorize` 或 `EOF`，优先检查 `.env` 中是否已经配置镜像前缀。
+默认推荐通过 `.env` 使用 `127.0.0.1:8080`。
+如果未提供 `.env`，代码默认端口为 `8888`。
 
-## LLM 配置
-
-如果需要启用节能问答大模型，可在启动前设置环境变量：
-
-- `LLM_BASE_URL`
-- `LLM_API_KEY`
-- `LLM_MODEL`
-- `LLM_TEMPERATURE`
-- `LLM_TIMEOUT_SECONDS`
-
-未配置时，智能体接口会自动降级为规则建议，不影响主流程。
-
-## 权重与数据
-
-- `models_agent/checkpoints/`：推理服务默认读取的分类与预测权重
-- `models/data/raw/`：离线训练原始数据目录
-- `models/data/processed/`：离线训练生成的数据集目录
-- `live/data/live_sample.csv`：独立实时演示使用的连续窗口循环样本
-
-仓库当前默认使用：
-
-- 分类权重：`models_agent/checkpoints/classification/xgboost/best_model.json`
-- TFT 权重：`models_agent/checkpoints/forecast/tft/best.ckpt`
-
-## 本地开发
-
-### 前端
+### 3. 启动前端
 
 ```bash
 cd frontend
@@ -239,41 +74,82 @@ pnpm install
 pnpm dev
 ```
 
-### 后端
+默认地址：`http://127.0.0.1:3000`
 
-```bash
-cd backend
-go run ./cmd/api
-```
+开发环境下，Vite 会将 `/api` 代理到 `http://127.0.0.1:8080`。
 
-### Python 推理服务
-
-```bash
-cd models_agent
-uv sync
-uv run python main.py
-```
-
-### 离线训练
-
-```bash
-cd models
-uv sync
-uv run python data/process/main.py run-all
-uv run python data/process/main.py export-live-sample
-uv run python classification/xgboost/main.py train
-uv run python forecast/tft/main.py train
-```
-
-### 实时演示模块
+### 4. 启动实时演示模块
 
 ```bash
 cd live
 go run ./cmd/server
 ```
 
-说明：
+默认地址：`http://127.0.0.1:8090`
 
-- 默认读取 `live/data/live_sample.csv`
-- 每 `1s` 推进一个虚拟 `15min` 点
-- 页面会实时刷新今日负荷、上一完整日分类、下一日预测与问答结果
+## 各模块说明
+
+### `frontend/`
+
+- 提供数据集中心、节能问答、服务概览、实时演示、报告中心等页面
+- 使用 `Ant Design`、`React Router`、`Zustand`、`ECharts`
+- 支持本地 mock 模式和真实后端联调
+
+### `backend/`
+
+- 管理数据集导入、统计分析、分类预测、负荷预测、问答会话、节能建议和报告导出
+- 依赖 `MySQL` 持久化业务数据
+- 通过 HTTP 调用 `models_agent/` 暴露的模型与智能体接口
+
+### `models_agent/`
+
+- 基于 `Robyn` 提供内部模型接口与智能体接口
+- 当前集成 `XGBoost` 分类推理、`TFT` 预测推理、问答工作流、Markdown 转 PDF
+- 默认从 `models_agent/checkpoints/` 读取本地权重
+
+### `models/`
+
+- 管理 15 分钟粒度数据预处理、分类数据集构建、预测数据集构建、分类训练、预测训练
+- 使用 `uv` 管理 Python 依赖
+- 原始数据与生成数据集目录默认被 `.gitignore` 忽略
+
+### `live/`
+
+- 用连续窗口样本模拟实时数据流
+- 提供网页展示、SSE 推送和当前状态问答入口
+- 运行时直接调用 `models_agent/` 的模型和智能体接口
+
+## 离线建模常用命令
+
+```bash
+cd models
+uv sync
+uv run python data/process/main.py preprocess-base
+uv run python data/process/main.py build-classification
+uv run python data/process/main.py build-forecast
+uv run python classification/xgboost/main.py train
+uv run python forecast/tft/train.py
+```
+
+补充说明：
+
+- 数据预处理主入口为 `models/data/process/main.py`
+- 分类训练主入口为 `models/classification/xgboost/main.py`
+- 预测训练主入口为 `models/forecast/tft/train.py`
+- 设备检测脚本可使用 `models/cuda_test.py` 与 `models/mps_test.py`
+
+## 关键端口
+
+- 前端：`3000`
+- 后端：`8080`（或未加载 `.env` 时的 `8888`）
+- Python 推理服务：`8001`
+- 实时演示：`8090`
+- MySQL：`3306`
+
+## 参考文件
+
+- `backend/.env.example`
+- `frontend/.env.example`
+- `models_agent/.env.example`
+- `schema.sql`
+- `models/data/process.md`

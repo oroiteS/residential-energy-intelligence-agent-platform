@@ -19,7 +19,7 @@ export const datasetStatusMap: Record<DatasetStatus, { label: string; color: str
 export const classificationLabelMap: Record<PredictedLabel, string> = {
   morning_peak: '上午高峰型',
   afternoon_peak: '下午高峰型',
-  day_low_night_high: '晚上高峰型',
+  night_peak: '晚上高峰型',
   all_day_low: '全天平稳型',
 }
 

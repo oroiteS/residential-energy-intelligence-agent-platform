@@ -12,6 +12,7 @@ from tqdm.auto import tqdm
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from classification.xgboost.constants import CLASS_LABEL_NAMES
 from data.process.classification.config import DEFAULT_CONFIG_PATH, load_experiment_config
 from data.process.classification.dataset import load_day_feature_frame
 from data.process.classification.engine import save_json_summary
@@ -29,6 +30,25 @@ def _load_mapping(mapping_path: Path) -> dict[int, str]:
     for cluster_key, label_name in raw_mapping.items():
         mapping[int(cluster_key)] = str(label_name).strip()
     return mapping
+
+
+def _validate_mapping_labels(mapping: dict[int, str]) -> None:
+    observed_labels = list(mapping.values())
+    expected_labels = set(CLASS_LABEL_NAMES)
+    missing_labels = [label_name for label_name in CLASS_LABEL_NAMES if label_name not in observed_labels]
+    unexpected_labels = sorted(set(observed_labels).difference(expected_labels))
+    duplicated_labels = sorted(
+        {
+            label_name
+            for label_name in observed_labels
+            if observed_labels.count(label_name) > 1
+        }
+    )
+    if missing_labels or unexpected_labels or duplicated_labels:
+        raise ValueError(
+            "映射文件标签集合与固定标签体系不一致："
+            f"missing={missing_labels} unexpected={unexpected_labels} duplicated={duplicated_labels}"
+        )
 
 
 def run_relabel(config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, object]:
@@ -52,6 +72,7 @@ def run_relabel(config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, object]:
     source_frame = load_day_feature_frame(experiment_config.data.data_path)
     assignments_frame = pd.read_csv(assignments_path)
     mapping = _load_mapping(mapping_path)
+    _validate_mapping_labels(mapping)
     observed_clusters = sorted(assignments_frame["cluster_id"].astype(int).unique().tolist())
     missing_clusters = [cluster_id for cluster_id in observed_clusters if cluster_id not in mapping]
     if missing_clusters:
