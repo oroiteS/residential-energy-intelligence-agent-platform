@@ -1,49 +1,54 @@
 # 居民用电分析与节能建议系统
 
-这是一个面向毕业设计场景的本地化居民用电分析项目，覆盖数据预处理、
-分类与预测训练、在线推理、节能问答、报告导出和实时演示。
-
-当前仓库中可直接关注的核心目录：
-
-- `frontend/`：React + Vite 前端工作台
-- `backend/`：Flask Python 后端（含模型推理与智能体）
-- `models/`：离线数据处理、分类训练、预测训练
-
-说明：
-
-- `doc/`、`doc-example/`、`mysql_data/`、`models/data/raw/`、
-  `models/data/processed/` 等目录已被 `.gitignore` 排除，不作为当前 README
-  的维护范围
-- 仓库根目录当前没有统一的 `.env.example`，环境变量示例分散在各子模块内
+毕业设计项目：基于电力用户日冻结数据的用电行为分类、负荷预测、异常检测与节能建议系统。
 
 ## 项目结构
 
 ```text
 .
-├── backend/        Flask Python 后端（API + 模型推理 + 智能体）
-├── frontend/       React 前端
-├── models/         离线建模与数据流水线
-├── docker-compose.yml
-├── schema.sql
+├── backend/            Flask Python 后端（API + 模型推理 + 智能体）
+├── frontend/           React + Vite + TypeScript 前端
+├── models/             离线数据预处理与模型训练
+├── doc/                项目文档与需求规格
+├── docker-compose.yml  本地 MySQL 开发环境
+├── schema.sql          数据库建表脚本
 └── README.md
 ```
 
 ## 模块关系
 
-典型联调链路如下：
+```
+models/ (离线训练)
+  │  分类模型权重、预测模型权重
+  ▼
+backend/models/artifacts/ (权重同步)
+  │
+backend/ (Flask API + 推理)
+  │  /api/v1/*
+  ▼
+frontend/ (React 工作台)
+```
 
-1. `models/` 生成训练数据并训练分类/预测模型
-2. 训练得到的权重同步到 `backend/models/artifacts/`
-3. `backend/` 负责数据导入、分析编排、结果存储、报告导出，ML 模型（XGBoost/LSTM/Isolation Forest）和智能体（LangChain）以 Python 模块形式同进程运行
-4. `frontend/` 调用 `backend/` 的 `/api/v1` 接口
+1. `models/` 完成数据预处理、特征工程与模型训练
+2. 训练权重同步到 `backend/models/artifacts/`
+3. `backend/` 提供 REST API，ML 模型（XGBoost 分类、LSTM/Transformer 预测、Isolation Forest 异常检测）和智能体（LangChain）同进程运行
+4. `frontend/` 通过 `/api/v1` 调用后端接口
 
 ## 快速启动
+
+### 0. 启动 MySQL
+
+```bash
+docker compose up -d
+```
+
+首次启动会自动执行 `schema.sql` 建表。
 
 ### 1. 启动 Flask 后端
 
 ```bash
 cd backend
-cp .env.example .env
+cp .env.example .env   # 按需修改数据库连接等配置
 uv sync
 uv run python main.py
 ```
@@ -60,58 +65,73 @@ pnpm dev
 
 默认地址：`http://127.0.0.1:3000`
 
-开发环境下，Vite 会将 `/api` 代理到 `VITE_BACKEND_BASE_URL`（默认 `http://127.0.0.1:5001`）。
+开发环境下 Vite 将 `/api` 代理到 `VITE_BACKEND_BASE_URL`（默认 `http://127.0.0.1:5000`）。
 
 ## 各模块说明
 
 ### `frontend/`
 
-- 提供数据集中心、节能问答、服务概览、实时演示、报告中心等页面
-- 使用 `Ant Design`、`React Router`、`Zustand`、`ECharts`
-- 支持本地 mock 模式和真实后端联调
+- 页面：数据集中心、数据集详情、节能问答、服务概览、实时演示、报告中心
+- 技术栈：React 19、TypeScript、Vite、Ant Design、React Router、Zustand、ECharts
+- 支持 mock 模式和真实后端联调，由 `VITE_USE_MOCK` 环境变量控制
+- 详见 `frontend/README.md`
 
 ### `backend/`
 
-- 管理数据集导入、统计分析、分类预测、负荷预测、问答会话、节能建议和报告导出
-- 依赖 `MySQL` 持久化业务数据
-- ML 模型（XGBoost 分类、LSTM 预测、Isolation Forest 异常检测）以 Python 模块同进程运行
-- 智能体基于 `LangChain` 实现，在 Flask 进程内调用 LLM
-- 使用 `uv` 管理 Python 依赖
+- Flask REST API，管理数据集导入、统计分析、分类预测、负荷预测、问答会话、节能建议和报告导出
+- 依赖 MySQL 持久化业务数据
+- ML 模型（XGBoost 分类、LSTM/Transformer 预测、Isolation Forest 异常检测）以 Python 模块同进程运行
+- 智能体基于 LangChain 实现，在 Flask 进程内调用 LLM
+- 使用 `uv` 管理依赖，Python >= 3.10
 
 ### `models/`
 
-- 管理 15 分钟粒度数据预处理、分类数据集构建、预测数据集构建、分类训练、预测训练
-- 使用 `uv` 管理 Python 依赖
-- 原始数据与生成数据集目录默认被 `.gitignore` 忽略
+- 基于 1000 户 × 365 天电力日冻结数据（总/峰/谷三类）
+- 分类任务：KMeans 无监督伪标签 + XGBoost 监督分类（16 维行为特征）
+- 预测任务：30 天历史 → 7 天预测，XGBoost/LSTM/Transformer 五种模型对比
+- 异常检测：Isolation Forest + 统计规则引擎
+- 每个任务独立预处理、配置和输出目录
+- 使用 `uv` 管理依赖，PyTorch 训练需在 CUDA 服务器上运行
+- 详见 `models/CLAUDE.md`
 
 ## 离线建模常用命令
 
 ```bash
 cd models
 uv sync
-uv run python main.py preprocess-base
-uv run python main.py build-classification
-uv run python main.py build-forecast
-uv run python classification/xgboost/main.py train
+
+# 数据预处理
+uv run python data/classification/preprocess_classification.py
+uv run python data/forecast/preprocess_forecast.py
+uv run python data/detection/preprocess_detection.py
+
+# 分类模型训练
+uv run python classification/kmeans/train.py
+uv run python classification/xgboost/train.py
+
+# 预测模型训练（需 CUDA）
+uv run python forecast/xgboost/train_xgboost.py
 uv run python forecast/lstm/train.py
+uv run python forecast/transformer/train.py
+uv run python forecast/lstm_baseline/train.py
+uv run python forecast/transformer_baseline/train.py
+
+# 异常检测
+uv run python detection/isolation_forest/train.py
+uv run python detection/statistical_rules/run.py
 ```
-
-补充说明：
-
-- 数据预处理主入口为 `models/main.py`
-- 分类训练主入口为 `models/classification/xgboost/main.py`
-- 预测训练主入口为 `models/forecast/lstm/train.py`（LSTM-Direct 多步直接预测）
-- 设备检测脚本可使用 `models/cuda_test.py` 与 `models/mps_test.py`
 
 ## 关键端口
 
-- 前端：`3000`
-- 后端：`5000`
-- MySQL：`3306`
+| 服务   | 端口  |
+|--------|-------|
+| 前端   | 3000  |
+| 后端   | 5000  |
+| MySQL  | 3306  |
 
 ## 参考文件
 
 - `backend/.env.example`
 - `frontend/.env.example`
 - `schema.sql`
-- `models/data/process.md`
+- `models/CLAUDE.md`
