@@ -1,0 +1,15 @@
+# KMeans 居民用电行为聚类配置
+
+data:
+  features_path: data/classification/output/window_features.csv
+
+cluster:
+  k: 5
+  # k 选择辅助范围，用于绘制手肘图和轮廓系数图
+  k_range_min: 2
+  k_range_max: 8
+  n_init: 20
+  random_seed: 42
+
+output:
+  output_dir: classification/kmeans/output

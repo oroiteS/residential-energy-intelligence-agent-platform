@@ -1,0 +1,20 @@
+# Isolation Forest 无监督异常检测配置
+
+data:
+  features_path: data/detection/output/window_features.csv
+
+model:
+  # 预期异常比例（无真实标签时的先验假设）
+  contamination: 0.05
+  # 树的数量
+  n_estimators: 200
+  # 每棵树采样比例
+  max_samples: 0.8
+  random_seed: 42
+
+output:
+  output_dir: detection/isolation_forest/output
+  anomaly_scores_file: anomaly_scores.csv
+  anomaly_samples_file: anomaly_samples.csv
+  anomaly_summary_file: anomaly_summary.json
+  model_file: isolation_forest.pkl

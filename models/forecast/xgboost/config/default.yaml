@@ -1,0 +1,128 @@
+# XGBoost 预测任务配置
+# 任务：输入过去 30 天日用电量，预测未来 7 天日用电量。
+
+data:
+  # 由 data/forecast/preprocess_forecast.py 生成的监督学习样本表。
+  dataset_path: data/forecast/output/forecast_samples_30_to_7.csv
+
+  # 只用于按时间顺序切分训练集/验证集/测试集，不作为模型输入。
+  date_column: forecast_start_date
+
+  # 元信息列：保留用于追踪样本，但训练时排除。
+  # y_peak_* / y_valley_* 不作为预测目标，仅保留用于峰谷 baseline 评估。
+  meta_columns:
+    - user_id
+    - window_start_date
+    - window_end_date
+    - forecast_start_date
+    - forecast_end_date
+    - y_peak_d01
+    - y_peak_d02
+    - y_peak_d03
+    - y_peak_d04
+    - y_peak_d05
+    - y_peak_d06
+    - y_peak_d07
+    - y_valley_d01
+    - y_valley_d02
+    - y_valley_d03
+    - y_valley_d04
+    - y_valley_d05
+    - y_valley_d06
+    - y_valley_d07
+
+  # 预测目标：未来 7 天的日用电量。
+  target_columns:
+    - y_energy_d01
+    - y_energy_d02
+    - y_energy_d03
+    - y_energy_d04
+    - y_energy_d05
+    - y_energy_d06
+    - y_energy_d07
+
+features:
+  # 输入特征明确控制在“用户上传数据可计算”的范围内：
+  # 1. 历史 30 天用电量；
+  # 2. 历史 30 天星期几周期编码；
+  # 3. 未来 7 天星期几周期编码；
+  # 4. 从历史 30 天用电量派生出的统计特征。
+  include_prefixes:
+    - x_energy_
+    - x_peak_energy_
+    - x_valley_energy_
+    - x_weekday_sin_
+    - x_weekday_cos_
+    - x_is_weekend_
+    - future_weekday_sin_
+    - future_weekday_cos_
+    - future_is_weekend_
+
+  # 这些特征都由历史用电量直接计算，不要求用户额外上传。
+  include_columns:
+    - hist_mean_7
+    - hist_mean_14
+    - hist_mean_30
+    - hist_std_7
+    - hist_std_30
+    - hist_min_30
+    - hist_max_30
+    - hist_last_value
+    - hist_trend_7
+    - hist_weekend_mean
+    - hist_workday_mean
+    - hist_weekend_workday_diff
+    - hist_peak_ratio
+    - hist_peak_mean_7
+    - hist_peak_mean_30
+    - hist_peak_std_7
+    - hist_peak_std_30
+    - hist_peak_min_30
+    - hist_peak_max_30
+    - hist_peak_last_value
+    - hist_peak_trend_7
+    - hist_valley_mean_7
+    - hist_valley_mean_30
+    - hist_valley_std_7
+    - hist_valley_std_30
+    - hist_valley_min_30
+    - hist_valley_max_30
+    - hist_valley_last_value
+    - hist_valley_trend_7
+
+  exclude_columns: []
+
+split:
+  # 默认按 forecast_start_date 做时间切分，与 LSTM/Transformer 预测实验保持同一评估口径。
+  # 如需评估“未见过用户”的泛化能力，可改为 user。
+  strategy: time
+  validation_ratio: 0.15
+  test_ratio: 0.15
+
+training:
+  num_boost_round: 1200
+  early_stopping_rounds: 80
+  checkpoint_interval: 50
+  # 重新评估模型时默认不续训旧断点，避免旧切分下的模型污染新指标。
+  resume: false
+  random_seed: 42
+
+xgboost_params:
+  objective: reg:squarederror
+  # 训练早停仍使用 rmse；脚本会额外输出 mse、mae、mape。
+  eval_metric: rmse
+  max_depth: 6
+  eta: 0.03
+  subsample: 0.9
+  colsample_bytree: 0.9
+  min_child_weight: 3
+  reg_lambda: 1.0
+  reg_alpha: 0.0
+  tree_method: hist
+
+output:
+  output_dir: forecast/xgboost/output
+  model_dir: models
+  checkpoint_dir: checkpoints
+  metrics_file: metrics.csv
+  feature_file: feature_columns.txt

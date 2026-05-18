@@ -1,0 +1,151 @@
+# PyTorch Lightning LSTM 残差预测配置
+# 任务：输入过去 30 天日用电序列，预测未来 7 天日用电量。
+# baseline：使用已经训练好的 XGBoost；LSTM 默认学习 XGBoost 的预测残差。
+
+data:
+  dataset_path: data/forecast/output/forecast_samples_30_to_7.csv
+  date_column: forecast_start_date
+  meta_columns:
+    - user_id
+    - window_start_date
+    - window_end_date
+    - forecast_start_date
+    - forecast_end_date
+  target_columns:
+    - y_energy_d01
+    - y_energy_d02
+    - y_energy_d03
+    - y_energy_d04
+    - y_energy_d05
+    - y_energy_d06
+    - y_energy_d07
+    - y_peak_d01
+    - y_peak_d02
+    - y_peak_d03
+    - y_peak_d04
+    - y_peak_d05
+    - y_peak_d06
+    - y_peak_d07
+    - y_valley_d01
+    - y_valley_d02
+    - y_valley_d03
+    - y_valley_d04
+    - y_valley_d05
+    - y_valley_d06
+    - y_valley_d07
+
+features:
+  # LSTM 的序列输入：过去 30 天，每天 4 个特征。
+  input_days: 30
+  sequence_feature_templates:
+    - x_energy_d{day:02d}
+    - x_peak_energy_d{day:02d}
+    - x_valley_energy_d{day:02d}
+    - x_weekday_sin_d{day:02d}
+    - x_weekday_cos_d{day:02d}
+    - x_is_weekend_d{day:02d}
+
+  # 未来 7 天星期信息是预测时已知的，作为额外上下文输入。
+  future_feature_templates:
+    - future_weekday_sin_d{day:02d}
+    - future_weekday_cos_d{day:02d}
+    - future_is_weekend_d{day:02d}
+
+  # 这些统计特征由过去 30 天历史用电量计算得到，不要求用户额外上传。
+  static_columns:
+    - hist_mean_7
+    - hist_mean_14
+    - hist_mean_30
+    - hist_std_7
+    - hist_std_30
+    - hist_min_30
+    - hist_max_30
+    - hist_last_value
+    - hist_trend_7
+    - hist_weekend_mean
+    - hist_workday_mean
+    - hist_weekend_workday_diff
+    - hist_peak_ratio
+    - hist_peak_mean_7
+    - hist_peak_mean_30
+    - hist_peak_std_7
+    - hist_peak_std_30
+    - hist_peak_min_30
+    - hist_peak_max_30
+    - hist_peak_last_value
+    - hist_peak_trend_7
+    - hist_valley_mean_7
+    - hist_valley_mean_30
+    - hist_valley_std_7
+    - hist_valley_std_30
+    - hist_valley_min_30
+    - hist_valley_max_30
+    - hist_valley_last_value
+    - hist_valley_trend_7
+
+baseline:
+  enabled: true
+  mode: residual
+  xgboost_model_dir: forecast/xgboost/output/models
+  xgboost_feature_file: forecast/xgboost/output/feature_columns.txt
+  cache_file: forecast/lstm_baseline/output/xgboost_baseline_cache.npz
+  use_cache: true
+
+split:
+  strategy: time
+  validation_ratio: 0.15
+  test_ratio: 0.15
+
+model:
+  hidden_size: 128
+  num_layers: 2
+  dropout: 0.2
+  mlp_hidden_size: 128
+
+training:
+  max_epochs: 150
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  early_stopping_patience: 200
+  min_delta: 0.0001
+  resume: true
+  random_seed: 42
+  gradient_clip_val: 1.0
+
+dataloader:
+  train_batch_size: 256
+  val_batch_size: 1024
+  test_batch_size: 1024
+  num_workers: 3
+  persistent_workers: true
+  pin_memory: true
+
+trainer:
+  accelerator: auto
+  devices: 1
+  precision: 32-true
+  deterministic: false
+  log_every_n_steps: 50
+
+test:
+  # checkpoint_path 为空时，test.py 会按 checkpoint_mode 自动寻找模型。
+  # 可选值：
+  # - best：优先使用 best-*.ckpt
+  # - last：使用 last.ckpt
+  # - auto：优先 best，找不到再用 last
+  checkpoint_path:
+  checkpoint_mode: auto
+
+  # 是否额外保存逐样本预测结果。文件会比较大，默认关闭。
+  save_predictions: false
+  predictions_file: predictions.csv
+
+  # 测试指标输出文件。这里单独配置，避免和训练日志混在一起。
+  metrics_file: test_metrics.csv
+
+output:
+  output_dir: forecast/lstm_baseline/output
+  checkpoint_dir: checkpoints
+  log_dir: logs
+  metrics_file: metrics.csv
+  feature_file: feature_columns.json

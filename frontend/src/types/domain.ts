@@ -1,14 +1,15 @@
 export type DatasetStatus = 'uploaded' | 'processing' | 'ready' | 'error'
-export type ForecastModelType = 'tft'
+export type ForecastModelType = 'lstm'
 export type ClassificationModelType = 'xgboost'
 export type PredictedLabel =
-  | 'morning_peak'
-  | 'afternoon_peak'
-  | 'night_peak'
-  | 'all_day_low'
-export type AdviceType = 'rule' | 'llm'
+  | '外出波动型'
+  | '峰时集中型'
+  | '中高用量型'
+  | '高耗持续型'
+  | '规律低耗型'
 export type ReportType = 'excel' | 'html' | 'pdf'
 export type ImportUnit = 'kwh' | 'wh' | 'w'
+export type DetectionModelType = 'iforest_rules'
 export type RiskFlag =
   | 'evening_peak_risk'
   | 'night_load_risk'
@@ -42,7 +43,6 @@ export type ModelHistoryWindowConfig = {
 export type SystemConfig = {
   peak_valley_config: PeakValleyConfig
   model_history_window_config: ModelHistoryWindowConfig
-  energy_advice_prompt_template: string
   data_upload_dir: string
   report_output_dir: string
 }
@@ -52,7 +52,6 @@ export type SystemConfigPatchInput = Partial<
     SystemConfig,
     | 'peak_valley_config'
     | 'model_history_window_config'
-    | 'energy_advice_prompt_template'
   >
 >
 
@@ -61,6 +60,7 @@ export type HealthStatus = {
   service: string
   version?: string
   dependencies?: Record<string, string>
+  peak_valley_config?: PeakValleyConfig
 }
 
 export type DatasetSummary = {
@@ -106,6 +106,10 @@ export type QualitySummary = {
   duplicate_count: number
   sampling_interval: string
   cleaning_strategies: string[]
+  min_granularity_minutes?: number | null
+  max_granularity_minutes?: number | null
+  accepted_min_granularity_minutes?: number | null
+  accepted_max_granularity_minutes?: number | null
 }
 
 export type DatasetDetailPayload = {
@@ -122,10 +126,8 @@ export type AnalysisSummary = {
   min_load_time: string
   peak_kwh: number
   valley_kwh: number
-  flat_kwh: number
   peak_ratio: number
   valley_ratio: number
-  flat_ratio: number
 }
 
 export type DailyTrendPoint = {
@@ -201,17 +203,17 @@ export type ForecastSummary = {
   forecast_end: string
   granularity: string
   schema_version?: 'v1'
-  forecast_horizon?: '1d'
-  predicted_avg_load_w: number
-  predicted_peak_load_w: number
+  forecast_horizon?: '7d'
+  model_type?: ForecastModelType
   predicted_total_kwh?: number
-  peak_period?: string
-  forecast_peak_periods?: string[]
+  predicted_peak_kwh?: number
+  predicted_valley_kwh?: number
+  predicted_avg_daily_kwh?: number
   predicted_peak_ratio?: number
   predicted_valley_ratio?: number
-  predicted_flat_ratio?: number
   risk_flags: RiskFlag[]
   forecast_classification?: ForecastClassificationSummary
+  future_detection?: DetectionResult | null
   confidence_hint?: AgentConfidenceLevel
 }
 
@@ -228,8 +230,10 @@ export type ForecastRecord = {
 }
 
 export type ForecastSeriesPoint = {
-  timestamp: string
-  predicted: number
+  date: string
+  predicted_total_kwh: number
+  predicted_peak_kwh: number
+  predicted_valley_kwh: number
 }
 
 export type ForecastDetail = {
@@ -237,26 +241,28 @@ export type ForecastDetail = {
   series: ForecastSeriesPoint[]
 }
 
-export type AdviceSummary = {
+export type DetectionReason = {
+  rule: string
+  feature: string
+  method: string
+  severity: number
+  reason: string
+}
+
+export type DetectionResult = {
   id: number
   dataset_id: number
-  classification_id: number | null
-  advice_type: AdviceType
-  summary: string
-  content_path: string
+  model_type: DetectionModelType
+  window_start: string | null
+  window_end: string | null
+  window_role: 'current' | 'future'
+  is_anomaly: boolean
+  anomaly_score: number
+  severity: 'low' | 'medium' | 'high'
+  reasons: DetectionReason[]
+  feature_summary: Record<string, number>
+  classification_hint?: string | null
   created_at: string
-}
-
-export type AdviceContentItem = {
-  reason: string
-  action: string
-}
-
-export type AdviceDetail = {
-  advice: AdviceSummary
-  content: {
-    items: AdviceContentItem[]
-  }
 }
 
 export type ReportRecord = {
@@ -330,7 +336,7 @@ export type ImportDatasetInput = {
 
 export type ForecastPredictInput = {
   model_type: ForecastModelType
-  granularity: string
+  granularity: 'daily'
   forecast_start: string
   forecast_end: string
   force_refresh: boolean

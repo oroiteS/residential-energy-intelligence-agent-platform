@@ -14,16 +14,18 @@ import {
   Descriptions,
   Empty,
   List,
-  Progress,
   Row,
   Select,
   Space,
   Spin,
   Tabs,
+  Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
+import type { ColumnsType } from 'antd/es/table'
 import { useNavigate, useParams } from 'react-router-dom'
 import { PeakRatioChart } from '@/components/charts/PeakRatioChart'
 import { TrendChart } from '@/components/charts/TrendChart'
@@ -32,8 +34,10 @@ import { SectionCard } from '@/components/common/SectionCard'
 import { StatusTag } from '@/components/common/StatusTag'
 import { MetricCard } from '@/components/sections/MetricCard'
 import {
-  adviceTypeMap,
   classificationLabelMap,
+  detectionFeatureDescriptionMap,
+  detectionFeatureLabelMap,
+  detectionMethodLabelMap,
   forecastModelMap,
   reportTypeMap,
   riskFlagMap,
@@ -42,22 +46,23 @@ import {
   downloadReport,
   extractApiErrorMessage,
   exportDatasetReport,
-  fetchAdvices,
   fetchClassifications,
+  fetchCurrentDetection,
   fetchDatasetAnalysis,
   fetchDatasetDetail,
   fetchForecastDetail,
   fetchForecasts,
+  fetchHealth,
   fetchReports,
-  generateAdvices,
   runClassification,
+  runDetection,
   runForecast,
 } from '@/services/dashboard'
 import type {
-  AdviceDetail,
   AnalysisPayload,
   ClassificationResult,
   DatasetDetailPayload,
+  DetectionResult,
   ForecastDetail,
   ForecastModelType,
   ForecastRecord,
@@ -72,23 +77,35 @@ import {
   formatFileSize,
   formatNumber,
   formatPercent,
-  formatPeriodRange,
-  formatTime,
 } from '@/utils/formatters'
 
-const maxVisibleForecastDays = 7
+type ClassificationTableItem = ClassificationResult & {
+  dayLabel: string
+}
 
-function buildDayWindow(timeEnd: string | null | undefined, dayOffset = 0) {
+const maxVisibleForecastDays = 7
+const defaultPeakValleyConfig: PeakValleyConfig = {
+  peak: ['07:00-11:00', '18:00-23:00'],
+  valley: ['23:00-07:00', '11:00-18:00'],
+}
+
+function buildDayWindow(timeEnd: string | null | undefined, dayOffset = 1, durationDays = 7) {
   const baseDate = timeEnd ? new Date(timeEnd) : new Date('2014-12-04T23:45:00+08:00')
   baseDate.setDate(baseDate.getDate() + dayOffset)
   const year = baseDate.getFullYear()
   const month = String(baseDate.getMonth() + 1).padStart(2, '0')
   const day = String(baseDate.getDate()).padStart(2, '0')
   const dayKey = `${year}-${month}-${day}`
+  const endDate = new Date(baseDate)
+  endDate.setDate(endDate.getDate() + durationDays - 1)
+  const endYear = endDate.getFullYear()
+  const endMonth = String(endDate.getMonth() + 1).padStart(2, '0')
+  const endDay = String(endDate.getDate()).padStart(2, '0')
+  const endDayKey = `${endYear}-${endMonth}-${endDay}`
 
   return {
     start: `${dayKey}T00:00:00+08:00`,
-    end: `${dayKey}T23:45:00+08:00`,
+    end: `${endDayKey}T23:45:00+08:00`,
   }
 }
 
@@ -123,142 +140,35 @@ function getForecastDayOffset(
 }
 
 function formatClassificationDay(item: ClassificationResult) {
+  if (item.window_start && item.window_end) {
+    return `${formatDateTime(item.window_start).slice(0, 10)} ~ ${formatDateTime(item.window_end).slice(5, 10)}`
+  }
   const source = item.window_start || item.created_at
-  if (!source) {
-    return '未知日期'
-  }
-  return formatDateTime(source).slice(0, 10)
+  return source ? formatDateTime(source).slice(0, 10) : '未知窗口'
 }
 
-function getForecastDayLabel(
+function getForecastWindowLabel(summary: ForecastSummary | null | undefined) {
+  if (summary?.forecast_horizon === '7d') {
+    return '未来 7 天'
+  }
+  return '预测窗口'
+}
+
+function getForecastRangeLabel(
   forecastStart: string | null | undefined,
-  datasetTimeEnd: string | null | undefined,
+  forecastEnd: string | null | undefined,
 ) {
-  const dayOffset = getForecastDayOffset(forecastStart, datasetTimeEnd)
-  if (dayOffset === null) {
-    return '历史记录'
+  if (!forecastStart || !forecastEnd) {
+    return '--'
   }
-  return `未来第 ${dayOffset} 天`
-}
-
-type MinuteRange = {
-  start: number
-  end: number
-}
-
-function parseClockMinute(raw: string) {
-  const parts = raw.trim().split(':')
-  if (parts.length !== 2) {
-    return null
-  }
-
-  const hour = Number(parts[0])
-  const minute = Number(parts[1])
-  if (
-    !Number.isInteger(hour) ||
-    !Number.isInteger(minute) ||
-    hour < 0 ||
-    hour > 23 ||
-    minute < 0 ||
-    minute > 59
-  ) {
-    return null
-  }
-
-  return hour * 60 + minute
-}
-
-function expandPeriodToRanges(period: string): MinuteRange[] {
-  const parts = period.split('-')
-  if (parts.length !== 2) {
-    return []
-  }
-
-  const start = parseClockMinute(parts[0])
-  const end = parseClockMinute(parts[1])
-  if (start === null || end === null) {
-    return []
-  }
-
-  if (start === end) {
-    return [{ start: 0, end: 24 * 60 }]
-  }
-  if (start < end) {
-    return [{ start, end }]
-  }
-  return [
-    { start, end: 24 * 60 },
-    { start: 0, end },
-  ]
-}
-
-function mergeMinuteRanges(ranges: MinuteRange[]) {
-  if (ranges.length === 0) {
-    return []
-  }
-
-  const sorted = [...ranges].sort((left, right) => left.start - right.start)
-  const merged: MinuteRange[] = [sorted[0]]
-
-  for (const current of sorted.slice(1)) {
-    const last = merged[merged.length - 1]
-    if (current.start <= last.end) {
-      last.end = Math.max(last.end, current.end)
-      continue
-    }
-    merged.push({ ...current })
-  }
-
-  return merged
-}
-
-function formatMinute(minute: number) {
-  const normalized = ((minute % (24 * 60)) + 24 * 60) % (24 * 60)
-  const hour = Math.floor(normalized / 60)
-  const remain = normalized % 60
-  return `${String(hour).padStart(2, '0')}:${String(remain).padStart(2, '0')}`
-}
-
-function buildFlatPeriods(config: PeakValleyConfig) {
-  const occupied = mergeMinuteRanges(
-    [...config.peak, ...config.valley].flatMap((period) => expandPeriodToRanges(period)),
-  )
-  if (occupied.length === 0) {
-    return ['00:00-24:00']
-  }
-
-  const flat: MinuteRange[] = []
-  let cursor = 0
-  for (const range of occupied) {
-    if (cursor < range.start) {
-      flat.push({ start: cursor, end: range.start })
-    }
-    cursor = Math.max(cursor, range.end)
-  }
-  if (cursor < 24 * 60) {
-    flat.push({ start: cursor, end: 24 * 60 })
-  }
-
-  return flat
-    .filter((range) => range.end > range.start)
-    .map((range) => `${formatMinute(range.start)}-${range.end === 24 * 60 ? '24:00' : formatMinute(range.end)}`)
-}
-
-function getForecastPeakPeriods(summary: ForecastSummary) {
-  if (summary.forecast_peak_periods?.length) {
-    return summary.forecast_peak_periods
-  }
-  if (summary.peak_period) {
-    return [summary.peak_period]
-  }
-  return []
+  return `${formatDateTime(forecastStart).slice(0, 10)} ~ ${formatDateTime(forecastEnd).slice(5, 10)}`
 }
 
 function getPredictedTotalKwh(summary: ForecastSummary) {
   if (summary.predicted_total_kwh !== undefined && summary.predicted_total_kwh !== null) {
     return summary.predicted_total_kwh
   }
-  return (summary.predicted_avg_load_w * 24) / 1000
+  return 0
 }
 
 export function DatasetDetailPage() {
@@ -270,20 +180,22 @@ export function DatasetDetailPage() {
   const [forecastDetailLoading, setForecastDetailLoading] = useState(false)
   const [forecastActionLoading, setForecastActionLoading] = useState(false)
   const [classificationActionLoading, setClassificationActionLoading] = useState(false)
-  const [adviceActionLoading, setAdviceActionLoading] = useState(false)
+  const [detectionActionLoading, setDetectionActionLoading] = useState(false)
   const [reportActionLoading, setReportActionLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [detail, setDetail] = useState<DatasetDetailPayload | null>(null)
   const [analysis, setAnalysis] = useState<AnalysisPayload | null>(null)
   const [classification, setClassification] = useState<ClassificationResult | null>(null)
   const [classificationHistory, setClassificationHistory] = useState<ClassificationResult[]>([])
-  const [advices, setAdvices] = useState<AdviceDetail[]>([])
+  const [detection, setDetection] = useState<DetectionResult | null>(null)
   const [reports, setReports] = useState<ReportRecord[]>([])
   const [forecasts, setForecasts] = useState<ForecastRecord[]>([])
   const [activeForecastId, setActiveForecastId] = useState<number | null>(null)
   const [forecastDetail, setForecastDetail] = useState<ForecastDetail | null>(null)
-  const [selectedForecastModel, setSelectedForecastModel] = useState<ForecastModelType>('tft')
-  const [selectedFutureDay, setSelectedFutureDay] = useState(1)
+  const [selectedForecastModel, setSelectedForecastModel] = useState<ForecastModelType>('lstm')
+  const [runtimePeakValleyConfig, setRuntimePeakValleyConfig] = useState<PeakValleyConfig>(
+    defaultPeakValleyConfig,
+  )
 
   const loadDetail = useCallback(async () => {
     if (!Number.isFinite(datasetId)) {
@@ -297,29 +209,37 @@ export function DatasetDetailPage() {
     try {
       const detailResult = await fetchDatasetDetail(datasetId)
       setDetail(detailResult)
+      try {
+        const healthResult = await fetchHealth()
+        if (healthResult.peak_valley_config) {
+          setRuntimePeakValleyConfig(healthResult.peak_valley_config)
+        }
+      } catch {
+        setRuntimePeakValleyConfig(defaultPeakValleyConfig)
+      }
 
       if (detailResult.dataset.status !== 'ready') {
         setAnalysis(null)
         setClassification(null)
         setClassificationHistory([])
-        setAdvices([])
+        setDetection(null)
         setReports([])
         setForecasts([])
         setActiveForecastId(null)
-        setSelectedForecastModel('tft')
+        setSelectedForecastModel('lstm')
         return
       }
 
       const [
         analysisResult,
         classificationResults,
-        adviceResult,
+        detectionResult,
         reportResult,
         forecastResult,
       ] = await Promise.all([
         fetchDatasetAnalysis(datasetId),
         fetchClassifications(datasetId),
-        fetchAdvices(datasetId),
+        fetchCurrentDetection(datasetId),
         fetchReports(datasetId),
         fetchForecasts(datasetId),
       ])
@@ -327,11 +247,11 @@ export function DatasetDetailPage() {
       setAnalysis(analysisResult)
       setClassification(classificationResults[0] ?? null)
       setClassificationHistory(classificationResults)
-      setAdvices(adviceResult)
+      setDetection(detectionResult)
       setReports(reportResult)
       setForecasts(forecastResult)
       setActiveForecastId(forecastResult[0]?.id ?? null)
-      setSelectedForecastModel(forecastResult[0]?.model_type ?? 'tft')
+      setSelectedForecastModel(forecastResult[0]?.model_type ?? 'lstm')
     } catch {
       setError('数据集详情加载失败，请稍后重试。')
     } finally {
@@ -394,12 +314,6 @@ export function DatasetDetailPage() {
     return items
   }
 
-  const refreshAdvices = async () => {
-    const result = await fetchAdvices(datasetId)
-    setAdvices(result)
-    return result
-  }
-
   const visibleForecasts = forecasts.filter(
     (item) => getForecastDayOffset(item.forecast_start, detail?.dataset.time_end ?? null) !== null,
   ).sort((left, right) => {
@@ -413,6 +327,14 @@ export function DatasetDetailPage() {
     return new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
   })
   const selectedForecast = visibleForecasts.find((item) => item.id === activeForecastId) ?? null
+  const peakValleyConfig = {
+    peak: analysis?.peak_valley_config.peak.length
+      ? analysis.peak_valley_config.peak
+      : runtimePeakValleyConfig.peak,
+    valley: analysis?.peak_valley_config.valley.length
+      ? analysis.peak_valley_config.valley
+      : runtimePeakValleyConfig.valley,
+  }
   const weeklyTrendChartData =
     analysis && analysis.charts.weekly_trend.length >= 2
       ? analysis.charts.weekly_trend.map((item) => ({
@@ -420,8 +342,6 @@ export function DatasetDetailPage() {
           value: item.kwh,
         }))
       : []
-  const flatPeriods = analysis ? buildFlatPeriods(analysis.peak_valley_config) : []
-
   if (loading) {
     return (
       <div className="page-state">
@@ -448,26 +368,76 @@ export function DatasetDetailPage() {
     )
   }
 
-  const probabilityEntries = Object.entries(classification?.probabilities ?? {})
-  const classificationItems = classificationHistory.map((item) => ({
+  const classificationItems: ClassificationTableItem[] = classificationHistory.map((item) => ({
     ...item,
     dayLabel: formatClassificationDay(item),
   }))
-  const adviceItems = advices.flatMap((item) =>
-    item.content.items.map((contentItem, index) => ({
-      key: `${item.advice.id}-${index}`,
-      advice: item.advice,
-      ...contentItem,
-    })),
+  const renderClassificationConfidenceTooltip = (item: ClassificationResult) => (
+    <div className="classification-confidence-tooltip">
+      {Object.entries(classificationLabelMap).map(([label, displayName]) => {
+        const probability =
+          item.probabilities[label as keyof typeof classificationLabelMap] ?? 0
+        return (
+          <div key={label} className="classification-confidence-tooltip__row">
+            <span>{displayName}</span>
+            <strong>{formatPercent(probability)}</strong>
+          </div>
+        )
+      })}
+    </div>
   )
+  const classificationColumns: ColumnsType<ClassificationTableItem> = [
+    {
+      title: '分类窗口',
+      dataIndex: 'dayLabel',
+      key: 'dayLabel',
+      width: 190,
+      render: (value: string) => <Typography.Text strong>{value}</Typography.Text>,
+    },
+    {
+      title: '行为类别',
+      dataIndex: 'predicted_label',
+      key: 'predicted_label',
+      width: 150,
+      render: (_value, item) => (
+        <Tag className="tone-tag tone-tag--accent">
+          {item.label_display_name ?? classificationLabelMap[item.predicted_label]}
+        </Tag>
+      ),
+    },
+    {
+      title: '置信度',
+      dataIndex: 'confidence',
+      key: 'confidence',
+      width: 110,
+      render: (value: number, item) => (
+        <Tooltip
+          placement="topRight"
+          title={renderClassificationConfidenceTooltip(item)}
+        >
+          <Typography.Text className="classification-confidence-value">
+            {formatPercent(value)}
+          </Typography.Text>
+        </Tooltip>
+      ),
+    },
+    {
+      title: '分类摘要',
+      dataIndex: 'explanation',
+      key: 'explanation',
+      render: (value: string | undefined) => (
+        <Typography.Text type="secondary">{value || '暂无分类说明'}</Typography.Text>
+      ),
+    },
+  ]
   const datasetReady = detail.dataset.status === 'ready'
   const handleGenerateForecast = async () => {
-    const window = buildDayWindow(detail.dataset.time_end, selectedFutureDay)
+    const window = buildDayWindow(detail.dataset.time_end)
     setForecastActionLoading(true)
     try {
       const result = await runForecast(datasetId, {
         model_type: selectedForecastModel,
-        granularity: '15min',
+        granularity: 'daily',
         forecast_start: window.start,
         forecast_end: window.end,
         force_refresh: true,
@@ -498,16 +468,16 @@ export function DatasetDetailPage() {
     }
   }
 
-  const handleGenerateAdvices = async () => {
-    setAdviceActionLoading(true)
+  const handleRunDetection = async () => {
+    setDetectionActionLoading(true)
     try {
-      await generateAdvices(datasetId)
-      await refreshAdvices()
-      message.success('规则建议已生成。')
+      const result = await runDetection(datasetId)
+      setDetection(result)
+      message.success('异常检测结果已刷新。')
     } catch (error) {
-      message.error(extractApiErrorMessage(error, '生成规则建议失败，请稍后重试。'))
+      message.error(extractApiErrorMessage(error, '生成异常检测结果失败，请稍后重试。'))
     } finally {
-      setAdviceActionLoading(false)
+      setDetectionActionLoading(false)
     }
   }
 
@@ -697,21 +667,18 @@ export function DatasetDetailPage() {
                     </SectionCard>
                   </Col>
                   <Col xs={24} xl={10}>
-                    <SectionCard title="峰谷平占比" subtitle="从时段结构理解用电分布">
+                    <SectionCard title="峰谷占比" subtitle="从峰时和谷时结构理解用电分布">
                       <PeakRatioChart data={analysis.charts.peak_valley_pie} />
                       <Descriptions column={1} size="small">
                         <Descriptions.Item label="峰时">
-                          {analysis.peak_valley_config.peak.join(' / ')}
+                          {peakValleyConfig.peak.join(' / ')}
                         </Descriptions.Item>
                         <Descriptions.Item label="谷时">
-                          {analysis.peak_valley_config.valley.join(' / ')}
-                        </Descriptions.Item>
-                        <Descriptions.Item label="平时">
-                          {flatPeriods.join(' / ')}
+                          {peakValleyConfig.valley.join(' / ')}
                         </Descriptions.Item>
                       </Descriptions>
                       <Typography.Text type="secondary">
-                        平时为未落入峰时、谷时配置的其余时段，所以峰时和谷时本身不需要互补。
+                        本项目仅区分峰时和谷时，所有上传数据最终都会归入这两类时段。
                       </Typography.Text>
                     </SectionCard>
                   </Col>
@@ -725,10 +692,10 @@ export function DatasetDetailPage() {
             children: (
               <div className="page-stack">
                 <Row gutter={[16, 16]}>
-                  <Col xs={24} xl={10}>
+                  <Col xs={24} xl={16}>
                     <SectionCard
                       title="行为分类结果"
-                      subtitle="识别样本更接近哪一类日常用电模式。"
+                      subtitle="按自然周识别用电行为类型，便于观察近期模式是否稳定。"
                       extra={
                         <Button
                           loading={classificationActionLoading}
@@ -739,68 +706,42 @@ export function DatasetDetailPage() {
                       }
                     >
                       {classification ? (
-                        <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                          <Tag className="tone-tag tone-tag--accent">
-                            {classification.label_display_name ??
-                              classificationLabelMap[classification.predicted_label]}
-                          </Tag>
-                          {classification.explanation ? (
-                            <Typography.Paragraph>{classification.explanation}</Typography.Paragraph>
-                          ) : (
-                            <Typography.Paragraph>
-                              当前分类模型将该样本识别为
-                              {classification.label_display_name ??
-                                classificationLabelMap[classification.predicted_label]}
-                              ，可结合下方概率分布判断稳定性。
-                            </Typography.Paragraph>
-                          )}
-                          <Typography.Text strong>
-                            最高置信度：{formatPercent(classification.confidence)}
-                          </Typography.Text>
-                          <Typography.Text type="secondary">
-                            当前摘要对应日期：{formatClassificationDay(classification)}
-                          </Typography.Text>
-                          <div className="probability-list">
-                            {probabilityEntries.map(([label, probability]) => (
-                              <div key={label} className="probability-list__item">
-                                <span>{classificationLabelMap[label as keyof typeof classificationLabelMap]}</span>
-                                <Progress
-                                  percent={Number((probability * 100).toFixed(2))}
-                                  showInfo={false}
-                                  strokeColor="#0f766e"
-                                />
+                        <Space direction="vertical" size={18} style={{ width: '100%' }}>
+                          <div className="classification-current">
+                            <div>
+                              <Tag className="tone-tag tone-tag--accent">
+                                {classification.label_display_name ??
+                                  classificationLabelMap[classification.predicted_label]}
+                              </Tag>
+                              <Typography.Title level={4} className="classification-current__title">
+                                最新分类窗口：{formatClassificationDay(classification)}
+                              </Typography.Title>
+                              <Typography.Paragraph className="classification-current__summary">
+                                {classification.explanation ||
+                                  `模型判定为${
+                                    classification.label_display_name ??
+                                    classificationLabelMap[classification.predicted_label]
+                                  }。`}
+                              </Typography.Paragraph>
+                            </div>
+                            <Tooltip
+                              placement="topRight"
+                              title={renderClassificationConfidenceTooltip(classification)}
+                            >
+                              <div className="classification-current__confidence">
+                                <span>最高置信度</span>
+                                <strong>{formatPercent(classification.confidence)}</strong>
                               </div>
-                            ))}
+                            </Tooltip>
                           </div>
-                          <List
-                            size="small"
-                            header={<Typography.Text strong>按日分类历史</Typography.Text>}
+                          <Table
+                            className="classification-history-table"
+                            columns={classificationColumns}
                             dataSource={classificationItems}
-                            locale={{ emptyText: '暂无按日分类记录' }}
-                            renderItem={(item) => (
-                              <List.Item key={item.id}>
-                                <Space
-                                  align="start"
-                                  size={12}
-                                  style={{ justifyContent: 'space-between', width: '100%' }}
-                                >
-                                  <div>
-                                    <Typography.Text strong>{item.dayLabel}</Typography.Text>
-                                    <br />
-                                    <Typography.Text type="secondary">
-                                      {item.explanation || '暂无分类说明'}
-                                    </Typography.Text>
-                                  </div>
-                                  <div style={{ textAlign: 'right' }}>
-                                    <Tag>{item.label_display_name ?? classificationLabelMap[item.predicted_label]}</Tag>
-                                    <br />
-                                    <Typography.Text type="secondary">
-                                      置信度 {formatPercent(item.confidence)}
-                                    </Typography.Text>
-                                  </div>
-                                </Space>
-                              </List.Item>
-                            )}
+                            pagination={false}
+                            rowKey="id"
+                            scroll={{ x: 760 }}
+                            size="middle"
                           />
                         </Space>
                       ) : (
@@ -808,43 +749,133 @@ export function DatasetDetailPage() {
                       )}
                     </SectionCard>
                   </Col>
-                  <Col xs={24} xl={14}>
+                  <Col xs={24} xl={8}>
                     <SectionCard
-                      title="节能建议面板"
-                      subtitle="根据当前样本特征给出可执行建议。"
+                      title="智能体建议"
+                      subtitle="基于分类、预测与异常检测生成建议。"
+                      className="agent-advice-card"
                       extra={
                         <Button
-                          loading={adviceActionLoading}
-                          onClick={() => void handleGenerateAdvices()}
+                          type="primary"
+                          icon={<RobotOutlined />}
+                          onClick={() => navigate(`/chat?dataset=${detail.dataset.id}`)}
                         >
-                          生成规则建议
+                          进入智能问答
                         </Button>
                       }
                     >
-                      <List
-                        itemLayout="vertical"
-                        dataSource={adviceItems}
-                        locale={{ emptyText: '暂无节能建议' }}
-                        renderItem={(item) => (
-                          <List.Item key={item.key}>
-                            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                              <Space wrap>
-                                <Tag className="tone-tag tone-tag--warm">
-                                  {adviceTypeMap[item.advice.advice_type]}
-                                </Tag>
-                                <Typography.Text strong>{item.action}</Typography.Text>
-                              </Space>
-                              <Typography.Paragraph style={{ marginBottom: 0 }}>
-                                触发依据：{item.reason}
-                              </Typography.Paragraph>
-                            </Space>
-                          </List.Item>
-                        )}
-                      />
+                      <Space direction="vertical" size={14} className="agent-advice-entry">
+                        <Space wrap>
+                          <Tag className="tone-tag tone-tag--accent">分类上下文</Tag>
+                          <Tag className="tone-tag tone-tag--warm">未来预测</Tag>
+                          <Tag className="tone-tag tone-tag--muted">异常复核</Tag>
+                        </Space>
+                      </Space>
                     </SectionCard>
                   </Col>
                 </Row>
               </div>
+            ),
+          },
+          {
+            key: 'detection',
+            label: '异常检测',
+            children: (
+              <SectionCard
+                title="异常检测结果"
+                subtitle="识别最近 7 天窗口是否明显偏离历史用电规律。"
+                extra={
+                  <Button
+                    loading={detectionActionLoading}
+                    onClick={() => void handleRunDetection()}
+                  >
+                    重新检测异常
+                  </Button>
+                }
+              >
+                {detection ? (
+                  <Space direction="vertical" size={18} style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Tag color={detection.is_anomaly ? 'error' : 'success'}>
+                        {detection.is_anomaly ? '检测到异常' : '未检测到异常'}
+                      </Tag>
+                      <Typography.Text type="secondary">
+                        异常分数 {formatNumber(detection.anomaly_score, 4)}
+                      </Typography.Text>
+                    </Space>
+                    <Descriptions column={{ xs: 1, lg: 2 }} size="small">
+                      <Descriptions.Item label="检测窗口开始">
+                        {formatDateTime(detection.window_start)}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="检测窗口结束">
+                        {formatDateTime(detection.window_end)}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="辅助分类">
+                        {detection.classification_hint ?? '--'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="结果时间">
+                        {formatDateTime(detection.created_at)}
+                      </Descriptions.Item>
+                    </Descriptions>
+                    <List
+                      size="small"
+                      header={<Typography.Text strong>异常原因</Typography.Text>}
+                      dataSource={detection.reasons}
+                      locale={{ emptyText: '当前窗口未触发异常规则。' }}
+                      renderItem={(item, index) => (
+                        <List.Item key={`${item.rule}-${index}`}>
+                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Tooltip
+                                placement="topLeft"
+                                title={
+                                  detectionFeatureDescriptionMap[item.feature] ??
+                                  '该指标用于辅助解释当前窗口的用电行为特征。'
+                                }
+                              >
+                                <Tag className="feature-reason-tag">
+                                  {detectionFeatureLabelMap[item.feature] ?? item.feature}
+                                </Tag>
+                              </Tooltip>
+                              <Tag color="gold">
+                                {detectionMethodLabelMap[item.method] ?? item.method}
+                              </Tag>
+                              <Typography.Text type="secondary">
+                                触发强度 {formatPercent(item.severity)}
+                              </Typography.Text>
+                            </Space>
+                            <Typography.Text>{item.reason}</Typography.Text>
+                          </Space>
+                        </List.Item>
+                      )}
+                    />
+                    <Descriptions column={{ xs: 1, lg: 3 }} size="small" title="关键特征摘要">
+                      {Object.entries(detection.feature_summary).map(([key, value]) => (
+                        <Descriptions.Item
+                          key={key}
+                          label={
+                            <Tooltip
+                              placement="topLeft"
+                              title={
+                                detectionFeatureDescriptionMap[key] ??
+                                '该指标用于辅助解释当前窗口的用电行为特征。'
+                              }
+                            >
+                              <span className="feature-label-chip">
+                                {detectionFeatureLabelMap[key] ?? key}
+                              </span>
+                            </Tooltip>
+                          }
+                        >
+                          {formatNumber(value, 4)}
+                        </Descriptions.Item>
+                      ))}
+                    </Descriptions>
+                  </Space>
+                ) : (
+                  <Empty description="暂无异常检测结果" />
+                )}
+              </SectionCard>
             ),
           },
           {
@@ -854,22 +885,13 @@ export function DatasetDetailPage() {
               <div className="page-stack">
                 <SectionCard
                   title="预测操作台"
-                  subtitle={`基于最近 7 天窗口，递推预测未来第 1 到第 ${maxVisibleForecastDays} 天。`}
+                  subtitle="基于最近 30 天日级窗口，一次生成未来 7 天总量、峰时和谷时预测。"
                   extra={
                     <Space wrap>
                       <Select
-                        value={selectedFutureDay}
-                        style={{ width: 160 }}
-                        options={Array.from({ length: maxVisibleForecastDays }, (_, index) => ({
-                          label: `未来第 ${index + 1} 天`,
-                          value: index + 1,
-                        }))}
-                        onChange={(value: number) => setSelectedFutureDay(value)}
-                      />
-                      <Select
                         value={selectedForecastModel}
                         style={{ width: 180 }}
-                        options={[{ label: forecastModelMap.tft, value: 'tft' }]}
+                        options={[{ label: forecastModelMap.lstm, value: 'lstm' }]}
                         onChange={(value: ForecastModelType) => setSelectedForecastModel(value)}
                       />
                       <Button
@@ -887,15 +909,15 @@ export function DatasetDetailPage() {
                     <Row gutter={[16, 16]}>
                       <Col xs={24} md={12} xl={6}>
                         <MetricCard
-                          label="平均负荷"
-                          value={`${formatNumber(selectedForecast.summary.predicted_avg_load_w)} W`}
+                          label="日均预测"
+                          value={`${formatNumber(selectedForecast.summary.predicted_avg_daily_kwh)} kWh`}
                           accent="amber"
                         />
                       </Col>
                       <Col xs={24} md={12} xl={6}>
                         <MetricCard
-                          label="峰值负荷"
-                          value={`${formatNumber(selectedForecast.summary.predicted_peak_load_w)} W`}
+                          label="峰时预测"
+                          value={`${formatNumber(selectedForecast.summary.predicted_peak_kwh)} kWh`}
                           accent="teal"
                         />
                       </Col>
@@ -956,14 +978,14 @@ export function DatasetDetailPage() {
                                   {forecastModelMap[item.model_type]}
                                 </Tag>
                                 <Tag className="tone-tag tone-tag--warm">
-                                  {getForecastDayLabel(item.forecast_start, detail.dataset.time_end)}
+                                  {getForecastWindowLabel(item.summary)}
                                 </Tag>
                                 <Typography.Text strong>
-                                  {formatDateTime(item.forecast_start)}
+                                  {getForecastRangeLabel(item.forecast_start, item.forecast_end)}
                                 </Typography.Text>
                               </Space>
                               <Typography.Text type="secondary">
-                                {formatNumber(item.summary.predicted_avg_load_w)} W 平均负荷 ·{' '}
+                                {formatNumber(item.summary.predicted_avg_daily_kwh)} kWh 日均 ·{' '}
                                 {formatNumber(getPredictedTotalKwh(item.summary))} kWh 预测总量
                               </Typography.Text>
                             </Space>
@@ -981,11 +1003,11 @@ export function DatasetDetailPage() {
                       ) : forecastDetail ? (
                         <TrendChart
                           data={forecastDetail.series.map((item) => ({
-                            label: formatTime(item.timestamp),
-                            value: item.predicted,
+                            label: item.date.slice(5),
+                            value: item.predicted_total_kwh,
                           }))}
                           lineColor="#9b876d"
-                          unit="W"
+                          unit="kWh"
                         />
                       ) : (
                         <Empty description="暂无预测曲线" />
@@ -1000,24 +1022,15 @@ export function DatasetDetailPage() {
                       {selectedForecast ? (
                         <Descriptions column={1} size="small">
                           <Descriptions.Item label="预测天数">
-                            {getForecastDayLabel(selectedForecast.forecast_start, detail.dataset.time_end)}
+                            {getForecastWindowLabel(selectedForecast.summary)}
                           </Descriptions.Item>
                           <Descriptions.Item label="模型类型">
                             {forecastModelMap[selectedForecast.model_type]}
                           </Descriptions.Item>
                           <Descriptions.Item label="预测区间">
-                            {formatDateTime(selectedForecast.forecast_start)} -{' '}
-                            {formatTime(selectedForecast.forecast_end)}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="高负荷时段">
-                            {getForecastPeakPeriods(selectedForecast.summary).length ? (
-                              <Space direction="vertical" size={4}>
-                                {getForecastPeakPeriods(selectedForecast.summary).map((item) => (
-                                  <Typography.Text key={item}>{formatPeriodRange(item)}</Typography.Text>
-                                ))}
-                              </Space>
-                            ) : (
-                              '--'
+                            {getForecastRangeLabel(
+                              selectedForecast.forecast_start,
+                              selectedForecast.forecast_end,
                             )}
                           </Descriptions.Item>
                           <Descriptions.Item label="预测总用电量">
@@ -1041,7 +1054,7 @@ export function DatasetDetailPage() {
                               '--'
                             )}
                           </Descriptions.Item>
-                          <Descriptions.Item label="风险提示">
+                          <Descriptions.Item label="复核提示">
                             {selectedForecast.summary.risk_flags.length ? (
                               <Space wrap>
                                 {selectedForecast.summary.risk_flags.map((flag) => (
@@ -1050,6 +1063,76 @@ export function DatasetDetailPage() {
                                   </Tag>
                                 ))}
                               </Space>
+                            ) : (
+                              '--'
+                            )}
+                          </Descriptions.Item>
+                          <Descriptions.Item label="未来异常检测">
+                            {selectedForecast.summary.future_detection ? (
+                              <div className="future-detection-panel">
+                                <div className="future-detection-panel__head">
+                                  <Tag
+                                    color={
+                                      selectedForecast.summary.future_detection.is_anomaly
+                                        ? 'warning'
+                                        : 'success'
+                                    }
+                                  >
+                                    {selectedForecast.summary.future_detection.is_anomaly
+                                      ? '建议复核'
+                                      : '未触发复核'}
+                                  </Tag>
+                                  <Typography.Text type="secondary">
+                                    偏离分数{' '}
+                                    {formatNumber(
+                                      selectedForecast.summary.future_detection.anomaly_score,
+                                      4,
+                                    )}
+                                  </Typography.Text>
+                                </div>
+                                {selectedForecast.summary.future_detection.reasons.length ? (
+                                  <List
+                                    className="future-detection-reasons"
+                                    size="small"
+                                    dataSource={selectedForecast.summary.future_detection.reasons}
+                                    renderItem={(item, index) => (
+                                      <List.Item key={`${item.rule}-${index}`}>
+                                        <Space
+                                          direction="vertical"
+                                          size={6}
+                                          style={{ width: '100%' }}
+                                        >
+                                          <Space wrap>
+                                            <Tooltip
+                                              placement="topLeft"
+                                              title={
+                                                detectionFeatureDescriptionMap[item.feature] ??
+                                                '该指标用于辅助解释预测窗口的用电行为特征。'
+                                              }
+                                            >
+                                              <Tag className="feature-reason-tag">
+                                                {detectionFeatureLabelMap[item.feature] ??
+                                                  item.feature}
+                                              </Tag>
+                                            </Tooltip>
+                                            <Tag color="gold">
+                                              {detectionMethodLabelMap[item.method] ?? item.method}
+                                            </Tag>
+                                            <Typography.Text type="secondary">
+                                              触发强度 {formatPercent(item.severity)}
+                                            </Typography.Text>
+                                          </Space>
+                                          <Typography.Text>{item.reason}</Typography.Text>
+                                        </Space>
+                                      </List.Item>
+                                    )}
+                                  />
+                                ) : (
+                                  <Typography.Text type="secondary">
+                                    预测窗口没有触发额外复核规则。
+                                  </Typography.Text>
+                                )}
+                              </div>
                             ) : (
                               '--'
                             )}

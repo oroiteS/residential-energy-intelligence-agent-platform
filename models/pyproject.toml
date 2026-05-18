@@ -1,21 +1,31 @@
 [project]
 name = "models"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "lightning>=2.5.0",
-    "tables>=3.9,<3.10.2",
-    "matplotlib>=3.10.8",
-    "numpy>=2.2.0",
-    "pandas>=2.3.3",
-    "pyarrow>=20.0.0",
-    "pyyaml>=6.0.2",
-    "scipy>=1.15.0",
-    "tqdm>=4.67.1",
-    "torch>=2.7.1",
-    "torchaudio>=2.7.1",
-    "torchvision>=0.22.1",
-    "xgboost>=3.0.0",
+    "lightning>=2.2",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "xlsxwriter>=3.2",
+    "pyyaml>=6.0",
+    "scikit-learn>=1.4",
+    "seaborn>=0.13",
+    "xgboost>=2.0",
+    "torch>=2.6",
+    "torchvision>=0.21",  # 加上这个！
 ]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+# CUDA 12.6 专用索引
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

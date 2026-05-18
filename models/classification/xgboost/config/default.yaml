@@ -1,0 +1,21 @@
+# XGBoost 居民用电行为分类器配置
+
+data:
+  features_path: data/classification/output/window_features.csv
+  labels_path: classification/kmeans/output/cluster_result.csv
+
+model:
+  n_estimators: 300
+  max_depth: 5
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  min_child_weight: 5
+  random_seed: 42
+
+training:
+  cv_folds: 5
+  test_ratio: 0.2
+
+output:
+  output_dir: classification/xgboost/output

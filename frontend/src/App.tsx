@@ -18,9 +18,6 @@ const ChatPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('@/pages/SettingsPage').then((module) => ({ default: module.SettingsPage })),
 )
-const LivePage = lazy(() =>
-  import('@/pages/LivePage').then((module) => ({ default: module.LivePage })),
-)
 const ReportsPage = lazy(() =>
   import('@/pages/ReportsPage').then((module) => ({ default: module.ReportsPage })),
 )
@@ -45,7 +42,6 @@ function App() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/overview" element={<SettingsPage />} />
           <Route path="/settings" element={<Navigate to="/overview" replace />} />
-          <Route path="/live" element={<LivePage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

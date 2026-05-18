@@ -52,15 +52,17 @@ pnpm preview
 - `VITE_USE_MOCK`
   - 开发环境下不等于 `false` 时启用本地 mock 数据
   - 设为 `false` 后调用真实后端接口
-- `VITE_LIVE_BASE_URL`
-  - 实时演示服务地址
-  - 默认值：`http://127.0.0.1:8090`
+- `VITE_BACKEND_BASE_URL`
+  - Vite 开发代理转发到的后端服务地址
+  - 默认值：`http://127.0.0.1:5000`
+- `VITE_API_PREFIX`
+  - 前端请求 API 的路径前缀
+  - 默认值：`/api/v1`
 
 ## 联调说明
 
-- 开发服务器会将 `/api` 代理到 `http://127.0.0.1:8080`
-- 如果后端运行在其它端口，需要同步修改 `vite.config.ts`
-- 实时演示页面不走 Vite 代理，而是直接请求 `VITE_LIVE_BASE_URL`
+- 开发服务器会将 `/api` 代理到 `VITE_BACKEND_BASE_URL`
+- 如果后端运行在其它端口，只需要修改 `frontend/.env.development`
 
 ## 目录说明
 
@@ -75,4 +77,4 @@ pnpm preview
 ## 开发建议
 
 - 纯前端联调阶段可先保持 `VITE_USE_MOCK=true`
-- 接真实服务时，优先保证 `backend/` 与 `live/` 端口和 README 中保持一致
+- 接真实服务时，优先保证 `backend/` 端口和 `VITE_BACKEND_BASE_URL` 保持一致

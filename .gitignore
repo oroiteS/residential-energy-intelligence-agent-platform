@@ -5,8 +5,9 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+*.code-workspace
 
-# Logs
+# Logs / Caches
 *.log
 logs/
 .cache/
@@ -36,10 +37,7 @@ node_modules/
 dist/
 dist-ssr/
 .pnpm-store/
-
-# Go / Build artifacts
-bin/
-coverage.out
+*.tsbuildinfo
 
 # Environment files
 .env
@@ -57,34 +55,51 @@ coverage.out
 .codex
 CLAUDE.md
 AGENTS.md
+.qoder/
 
 # Runtime data / generated outputs
 mysql_data/
-backend/outputs/
+backend/storage/
 backend/uploads/
-!models/classification/TCN/output/
-!models/forecast/LSTM/output/
-!models/forecast/transformer/output/
-models_agent/checkpoints/
+backend/reports/
+frontend/dist/
+models/outputs/
+models/**/output/
 
-# Generated datasets
-models/data/processed/
+# Model artifacts / weights
+backend/models/artifacts/
+*.ckpt
+*.pkl
+*.joblib
+*.npz
+*.pt
+*.pth
+*.onnx
+*.h5
 
-# Local raw training datasets
-models/data/raw/
+# Local datasets / upload simulation files
+models/data/*.csv
+models/data/*.xlsx
+models/data/**/*.csv
+models/data/**/*.xlsx
+models/data/**/*.parquet
+models/data/refit/upload_samples/
+models/data/refit/_tmp_upload_samples/
 
-# docx
-doc/
-doc-example/
-
+# Archives
 *.zip
 *.tar.gz
 *.rar
-.qoder/
-.cache/
-models_test/
-*.code-workspace
 
-# test
+# Temporary / scratch
+old
 test/
 */test
+
+# Keep docs and source files under data directories
+!models/data/**/*.py
+!models/data/**/*.md
+!models/data/**/*.json
+
+# doc
+doc/

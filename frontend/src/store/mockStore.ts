@@ -1,11 +1,11 @@
 import { create } from 'zustand'
 import {
   buildMockAssistantExchange,
-  demoAdvices,
   demoAnalyses,
   demoChatMessages,
   demoChatSessions,
   demoClassifications,
+  demoDetections,
   demoDatasetDetails,
   demoDatasets,
   demoForecastDetails,
@@ -28,7 +28,7 @@ type MockStore = {
   datasetDetails: typeof demoDatasetDetails
   analyses: typeof demoAnalyses
   classifications: typeof demoClassifications
-  advices: typeof demoAdvices
+  detections: typeof demoDetections
   reports: Record<number, ReportRecord[]>
   forecasts: Record<number, typeof demoForecasts[number]>
   forecastDetails: Record<number, ForecastDetail>
@@ -56,7 +56,7 @@ export const useMockStore = create<MockStore>((set, get) => ({
   datasetDetails: demoDatasetDetails,
   analyses: demoAnalyses,
   classifications: demoClassifications,
-  advices: demoAdvices,
+  detections: demoDetections,
   reports: demoReports,
   forecasts: demoForecasts,
   forecastDetails: demoForecastDetails,

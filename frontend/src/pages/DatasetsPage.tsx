@@ -27,11 +27,14 @@ import { PageHero } from '@/components/common/PageHero'
 import { SectionCard } from '@/components/common/SectionCard'
 import { StatusTag } from '@/components/common/StatusTag'
 import { MetricCard } from '@/components/sections/MetricCard'
-import { fetchDatasetList, importDataset } from '@/services/dashboard'
+import { extractApiErrorMessage, fetchDatasetList, importDataset } from '@/services/dashboard'
 import type { DatasetStatus, DatasetSummary } from '@/types/domain'
 import { formatDateTime, formatNumber } from '@/utils/formatters'
 
 const DEFAULT_PAGE_SIZE = 6
+const STANDARD_COLUMNS = ['timestamp', 'aggregate_w']
+const MIN_UPLOAD_GRANULARITY_MINUTES = 1
+const MAX_UPLOAD_GRANULARITY_MINUTES = 60
 
 const columns: ColumnsType<DatasetSummary> = [
   {
@@ -129,6 +132,95 @@ export function DatasetsPage() {
   const processingCount = datasets.filter((item) => item.status === 'processing').length
   const totalRows = datasets.reduce((sum, item) => sum + item.row_count, 0)
 
+  const downloadTemplate = () => {
+    const rows = [
+      STANDARD_COLUMNS.join(','),
+      '2026-01-01 00:00:00,420',
+      '2026-01-01 00:15:00,435',
+      '2026-01-01 00:30:00,418',
+      '2026-01-01 00:45:00,402',
+    ]
+    const blob = new Blob([`${rows.join('\n')}\n`], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'resident_energy_upload_template.csv'
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const validateUploadFile = async (file: File): Promise<string | null> => {
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      return '上传格式错误：当前仅支持 CSV 文件。'
+    }
+
+    const previewText = await file.slice(0, 256 * 1024).text()
+    const lines = previewText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+
+    if (lines.length < 2) {
+      return '上传格式错误：文件至少需要包含表头和两条数据。'
+    }
+
+    const headers = lines[0].split(',').map((item) => item.trim())
+    if (
+      headers.length !== STANDARD_COLUMNS.length ||
+      headers.some((item, index) => item !== STANDARD_COLUMNS[index])
+    ) {
+      return `上传格式错误：CSV 表头必须严格为 ${STANDARD_COLUMNS.join(',')}。`
+    }
+
+    const timestamps: number[] = []
+    const previewRows = lines.slice(1, 501)
+    for (const [index, line] of previewRows.entries()) {
+      const cells = line.split(',').map((item) => item.trim())
+      if (cells.length !== 2) {
+        return `上传格式错误：第 ${index + 2} 行必须包含 timestamp 和 aggregate_w 两列。`
+      }
+
+      const timestamp = new Date(cells[0].replace(' ', 'T')).getTime()
+      const aggregate = Number(cells[1])
+      if (!Number.isFinite(timestamp)) {
+        return `上传格式错误：第 ${index + 2} 行 timestamp 无法识别。`
+      }
+      if (!Number.isFinite(aggregate) || aggregate < 0) {
+        return `上传格式错误：第 ${index + 2} 行 aggregate_w 必须是非负数字。`
+      }
+      timestamps.push(timestamp)
+    }
+
+    if (timestamps.length < 2) {
+      return '上传格式错误：文件至少需要两条有效时间序列记录。'
+    }
+
+    const sortedTimestamps = [...timestamps].sort((left, right) => left - right)
+    const diffs = sortedTimestamps
+      .slice(1)
+      .map((value, index) => Math.round((value - sortedTimestamps[index]) / 1000))
+      .filter((value) => value > 0)
+
+    if (!diffs.length || new Set(diffs).size !== 1) {
+      return '上传格式错误：timestamp 必须按固定间隔采样。'
+    }
+
+    const granularitySeconds = diffs[0]
+    if (granularitySeconds % 60 !== 0) {
+      return '上传格式错误：采样间隔必须是整分钟，不能使用秒级原始数据。'
+    }
+
+    const granularityMinutes = granularitySeconds / 60
+    if (
+      granularityMinutes < MIN_UPLOAD_GRANULARITY_MINUTES ||
+      granularityMinutes > MAX_UPLOAD_GRANULARITY_MINUTES
+    ) {
+      return `上传格式错误：采样间隔必须在 ${MIN_UPLOAD_GRANULARITY_MINUTES} 到 ${MAX_UPLOAD_GRANULARITY_MINUTES} 分钟之间。`
+    }
+
+    return null
+  }
+
   const handleSubmit = async () => {
     if (!selectedFile) {
       message.warning('请先选择上传文件。')
@@ -168,8 +260,8 @@ export function DatasetsPage() {
       setDatasetName('')
       setDescription('')
       message.success('数据集导入请求已创建。')
-    } catch {
-      message.error('导入失败，请稍后重试。')
+    } catch (error) {
+      message.error(extractApiErrorMessage(error, '导入失败，请稍后重试。'))
     } finally {
       setSubmitting(false)
     }
@@ -371,9 +463,17 @@ export function DatasetsPage() {
               <div>
                 <Typography.Text strong>导入说明</Typography.Text>
                 <Typography.Paragraph className="dataset-upload__summary-text">
+                  仅支持标准 CSV：表头必须为 timestamp,aggregate_w，aggregate_w 单位为 W。
+                  采样间隔必须固定在 1 到 60 分钟之间，数据覆盖时长至少 30 天。
                   上传后系统会自动开始处理，你可以在列表中持续查看进度。
                 </Typography.Paragraph>
               </div>
+            </div>
+            <div className="dataset-upload__example">
+              <Typography.Text strong>标准 CSV 示例</Typography.Text>
+              <pre>{`timestamp,aggregate_w
+2013-10-09 17:00:00,523
+2013-10-09 17:15:00,526`}</pre>
             </div>
 
             <Form className="dataset-upload__form" layout="vertical" onFinish={() => void handleSubmit()}>
@@ -382,24 +482,39 @@ export function DatasetsPage() {
                   <input
                     className="upload-dropzone__input"
                     type="file"
-                    accept=".csv,.xlsx"
+                    accept=".csv"
                     onChange={(event) => {
                       const file = event.target.files?.[0] ?? null
-                      setSelectedFile(file)
-                      if (file && !datasetName) {
-                        setDatasetName(file.name.replace(/\.[^.]+$/, ''))
+                      if (!file) {
+                        setSelectedFile(null)
+                        return
                       }
+                      void validateUploadFile(file).then((validationError) => {
+                        if (validationError) {
+                          message.error(validationError)
+                          setSelectedFile(null)
+                          event.target.value = ''
+                          return
+                        }
+                        setSelectedFile(file)
+                        if (!datasetName) {
+                          setDatasetName(file.name.replace(/\.[^.]+$/, ''))
+                        }
+                      })
                     }}
                   />
                   <InboxOutlined className="upload-dropzone__icon" />
                   <Typography.Text strong>
-                    {selectedFile ? selectedFile.name : '点击选择 CSV 或 XLSX 文件'}
+                    {selectedFile ? selectedFile.name : '点击选择 CSV 文件'}
                   </Typography.Text>
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                    建议使用命名清晰的原始用电文件。
+                    标准表头：timestamp,aggregate_w；采样间隔 1 到 60 分钟，覆盖至少 30 天。
                   </Typography.Paragraph>
                 </label>
               </Form.Item>
+              <Button type="link" onClick={downloadTemplate} style={{ paddingLeft: 0 }}>
+                下载标准 CSV 模板
+              </Button>
 
               {selectedFile ? (
                 <div className="dataset-upload__selected">

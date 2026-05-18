@@ -4,7 +4,6 @@ import {
   ControlOutlined,
   DeploymentUnitOutlined,
   FileTextOutlined,
-  FundProjectionScreenOutlined,
   MenuOutlined,
   RobotOutlined,
 } from '@ant-design/icons'
@@ -31,11 +30,6 @@ const menuItems = [
     label: '服务概览',
   },
   {
-    key: '/live',
-    icon: <FundProjectionScreenOutlined />,
-    label: '实时演示',
-  },
-  {
     key: '/reports',
     icon: <FileTextOutlined />,
     label: '报告中心',
@@ -46,7 +40,6 @@ const titleMap: Record<string, string> = {
   '/datasets': '数据集中心',
   '/chat': '节能问答',
   '/overview': '服务概览',
-  '/live': '实时演示',
   '/reports': '报告中心',
 }
 

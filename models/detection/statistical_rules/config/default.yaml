@@ -1,0 +1,34 @@
+# 统计规则引擎配置
+# ====================
+# 阈值计算方法：
+#   1. σ 规则（method: sigma）—— 对比用户自身历史
+#      对每个用户的每个特征，计算其所有 7 天窗口的均值和标准差。
+#      当前窗口值偏离自身均值超过 N 个标准差 → 触发。
+#      适合检测"这个用户突然不一样了"。
+#   2. 百分位规则（method: percentile）—— 对比全体用户
+#      对每个特征，计算全量 359,000 样本的上下分位值。
+#      当前窗口值超出上下界 → 触发。
+#      适合检测"这个用户跟别人比太极端了"。
+#   3. 绝对值百分位规则（method: abs_percentile）—— 适用于趋势类特征
+#      对特征取绝对值后计算上分位（因为趋势可正可负，偏离方向不重要）。
+
+data:
+  features_path: data/detection/output/window_features.csv
+  # IForest 的异常标记结果，规则引擎只对这些样本生成解释。
+  # 如果文件不存在，则对全量样本运行规则（调试用）。
+  anomaly_scores_path: detection/isolation_forest/output/anomaly_scores.csv
+
+rules:
+  # σ 规则的倍数阈值。值越大越严格（减少误报，但可能漏掉弱信号）。
+  # 3.0 = 只有偏离自身均值 3 个标准差以上才触发，对应正态分布约 0.3% 的极端值。
+  sigma_multiplier: 3.0
+  # 全局百分位数的下界。5 = 低于全体用户 5% 分位的值视为异常低。
+  percentile_lower: 5
+  # 全局百分位数的上界。95 = 高于全体用户 95% 分位的值视为异常高。
+  percentile_upper: 95
+
+output:
+  output_dir: detection/statistical_rules/output
+  anomaly_reasons_file: anomaly_reasons.csv    # 每个异常样本触发的规则及原因详情
+  rule_summary_file: rule_summary.json         # 各规则触发频次统计
+  threshold_file: rule_thresholds.json         # 所有特征的实际分位值（可审计）

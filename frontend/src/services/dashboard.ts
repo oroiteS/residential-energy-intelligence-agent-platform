@@ -9,7 +9,6 @@ import {
 import { useMockStore } from '@/store/mockStore'
 import type { ApiEnvelope, Pagination } from '@/types/api'
 import type {
-  AdviceDetail,
   AnalysisPayload,
   AssistantAnswer,
   ChatMessage,
@@ -28,10 +27,11 @@ import type {
   SystemConfig,
   SystemConfigPatchInput,
   ClassificationResult,
+  DetectionResult,
 } from '@/types/domain'
 
 const http = axios.create({
-  baseURL: '/api/v1',
+  baseURL: import.meta.env.VITE_API_PREFIX || '/api/v1',
   timeout: 10000,
 })
 
@@ -244,28 +244,41 @@ export async function fetchClassifications(datasetId: number): Promise<Classific
   return data.data.items
 }
 
-export async function fetchAdvices(datasetId: number): Promise<AdviceDetail[]> {
+export async function fetchCurrentDetection(
+  datasetId: number,
+): Promise<DetectionResult | null> {
   if (isMockMode) {
     await sleep()
-    return useMockStore.getState().advices[datasetId] ?? []
+    return useMockStore.getState().detections[datasetId] ?? null
   }
 
-  const { data } = await http.get<
-    ApiEnvelope<{
-      items: Array<AdviceDetail['advice']>
-    }>
-  >(`/datasets/${datasetId}/advices`, {
-    params: { advice_type: 'rule' },
-  })
+  try {
+    const { data } = await http.get<ApiEnvelope<{ detection: DetectionResult }>>(
+      `/datasets/${datasetId}/detections/current`,
+    )
+    return data.data.detection
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      return null
+    }
+    throw error
+  }
+}
 
-  const details = await Promise.all(
-    data.data.items.map(async (item) => {
-      const detailResponse = await http.get<ApiEnvelope<AdviceDetail>>(`/advices/${item.id}`)
-      return detailResponse.data.data
-    }),
+export async function runDetection(datasetId: number): Promise<DetectionResult> {
+  if (isMockMode) {
+    await sleep(300)
+    const result = useMockStore.getState().detections[datasetId]
+    if (!result) {
+      throw new Error('DETECTION_NOT_FOUND')
+    }
+    return result
+  }
+
+  const { data } = await http.post<ApiEnvelope<{ detection: DetectionResult }>>(
+    `/datasets/${datasetId}/detections/detect`,
   )
-
-  return details
+  return data.data.detection
 }
 
 export async function fetchReports(datasetId: number): Promise<ReportRecord[]> {
@@ -487,13 +500,4 @@ export async function runClassification(datasetId: number): Promise<Classificati
     },
   )
   return data.data.classification
-}
-
-export async function generateAdvices(datasetId: number): Promise<void> {
-  if (isMockMode) {
-    await sleep(280)
-    return
-  }
-
-  await http.post(`/datasets/${datasetId}/advices/generate`)
 }

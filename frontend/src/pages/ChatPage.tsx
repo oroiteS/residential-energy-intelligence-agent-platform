@@ -45,6 +45,7 @@ import type {
   AssistantAnswer,
   ChatMessage,
   ChatSession,
+  Citation,
   DatasetSummary,
 } from '@/types/domain'
 import { formatDateTime, humanizeDateRanges } from '@/utils/formatters'
@@ -87,7 +88,73 @@ function isAssistantAnswerPayload(value: unknown): value is AssistantAnswer {
   )
 }
 
+function normalizeCitations(value: unknown): Citation[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value
+    .map((item, index): Citation | null => {
+      if (typeof item !== 'object' || item === null) {
+        return null
+      }
+      const record = item as Record<string, unknown>
+      const label = typeof record.label === 'string' ? record.label.trim() : ''
+      if (!label || !('value' in record)) {
+        return null
+      }
+      return {
+        key: typeof record.key === 'string' && record.key.trim()
+          ? record.key
+          : `citation_${index + 1}`,
+        label,
+        value: record.value as Citation['value'],
+      }
+    })
+    .filter((item): item is Citation => item !== null)
+}
+
+function normalizeActions(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value
+    .map((item) => String(item).trim())
+    .filter(Boolean)
+}
+
+function normalizeAssistantAnswer(value: unknown): AssistantAnswer | null {
+  if (!isAssistantAnswerPayload(value)) {
+    return null
+  }
+  const payload = value as Partial<AssistantAnswer> & { answer: string }
+  const confidenceLevel = payload.confidence_level &&
+    payload.confidence_level in assistantConfidenceMap
+    ? payload.confidence_level
+    : undefined
+  const intent = payload.intent && payload.intent in assistantIntentMap
+    ? payload.intent
+    : undefined
+
+  return {
+    session_id: payload.session_id,
+    answer: payload.answer,
+    citations: normalizeCitations(payload.citations),
+    actions: normalizeActions(payload.actions),
+    degraded: Boolean(payload.degraded),
+    error_reason: payload.error_reason ?? null,
+    created_at: payload.created_at,
+    intent,
+    confidence_level: confidenceLevel,
+    missing_information: Array.isArray(payload.missing_information)
+      ? payload.missing_information
+      : [],
+  }
+}
+
 function AnswerSignalTags({ answer }: { answer: AssistantAnswer }) {
+  const confidence = answer.confidence_level
+    ? assistantConfidenceMap[answer.confidence_level]
+    : null
   return (
     <Space wrap size={[8, 8]}>
       {answer.intent ? (
@@ -96,10 +163,10 @@ function AnswerSignalTags({ answer }: { answer: AssistantAnswer }) {
           {assistantIntentMap[answer.intent] ?? answer.intent}
         </Tag>
       ) : null}
-      {answer.confidence_level ? (
-        <Tag color={assistantConfidenceMap[answer.confidence_level].color}>
+      {confidence ? (
+        <Tag color={confidence.color}>
           <SafetyCertificateOutlined />
-          {assistantConfidenceMap[answer.confidence_level].label}
+          {confidence.label}
         </Tag>
       ) : null}
       {answer.degraded ? (
@@ -171,7 +238,7 @@ function AssistantResponsePanel({
         <Alert
           type="info"
           showIcon
-          message="Agent 仍需要更多信息"
+          message="可补充的信息"
           description={
             <div className="assistant-response__missing">
               {answer.missing_information.map((item) => (
@@ -248,7 +315,7 @@ function AssistantMessageHistoryPanel({ answer }: { answer: AssistantAnswer }) {
         <Alert
           type="info"
           showIcon
-          message="仍需补充的信息"
+          message="可补充的信息"
           description={
             <div>
               {answer.missing_information.map((item) => (
@@ -424,7 +491,8 @@ export function ChatPage() {
           const latestAssistantPayload = [...nextMessages]
             .reverse()
             .map((item) => item.assistant_payload)
-            .find((item) => isAssistantAnswerPayload(item)) ?? null
+            .map((item) => normalizeAssistantAnswer(item))
+            .find((item): item is AssistantAnswer => item !== null) ?? null
           startTransition(() => {
             setMessages(nextMessages)
             setAnswerBySessionId((current) => {
@@ -520,10 +588,11 @@ export function ChatPage() {
         })),
       })
       const nextMessages = await fetchChatMessages(sessionId)
+      const normalizedResult = normalizeAssistantAnswer(result) ?? result
       startTransition(() => {
         setAnswerBySessionId((current) => ({
           ...current,
-          [sessionId]: result,
+          [sessionId]: normalizedResult,
         }))
         setQuestion('')
         setMessages(nextMessages)
@@ -589,7 +658,7 @@ export function ChatPage() {
             </div>
             <div className="agent-hero-card__note">
               <ThunderboltOutlined />
-              <span>后端会自动注入统计摘要、分类结果、预测摘要与规则建议。</span>
+              <span>后端会自动注入统计分析、分类结果、预测摘要与异常检测结果。</span>
             </div>
           </div>
         }
@@ -681,10 +750,10 @@ export function ChatPage() {
               />
 
               <div className="assistant-rail__note">
-                <Typography.Text strong>工作流提示</Typography.Text>
+                <Typography.Text strong>问答提示</Typography.Text>
                 <Typography.Paragraph>
-                  适合直接问“今天是什么类型”“明天有什么风险”“我该优先改什么”，
-                  agent 会自动结合后端上下文做结构化回答。
+                  可以围绕当前数据集追问分类依据、未来 7 天预测、异常检测原因和可执行优化动作；
+                  agent 会结合后端结构化结果与本会话上下文回答。
                 </Typography.Paragraph>
               </div>
             </div>
@@ -731,8 +800,13 @@ export function ChatPage() {
                           <Typography.Paragraph style={{ marginBottom: 0 }}>
                             {item.content}
                           </Typography.Paragraph>
-                          {item.role === 'assistant' && isAssistantAnswerPayload(item.assistant_payload) ? (
-                            <AssistantMessageHistoryPanel answer={item.assistant_payload} />
+                          {item.role === 'assistant' ? (
+                            (() => {
+                              const normalizedAnswer = normalizeAssistantAnswer(item.assistant_payload)
+                              return normalizedAnswer ? (
+                                <AssistantMessageHistoryPanel answer={normalizedAnswer} />
+                              ) : null
+                            })()
                           ) : null}
                         </Space>
                       </div>
@@ -756,7 +830,7 @@ export function ChatPage() {
                       void handleAsk()
                     }
                   }}
-                  placeholder="例如：为什么我家夜间负荷偏高？明天的高峰主要会出现在什么时候？我应该优先做哪一步？"
+                  placeholder="例如：当前分类依据是什么？未来 7 天用电趋势如何？异常检测命中了哪些原因？"
                 />
                 <div className="assistant-composer__footer">
                   <Typography.Text type="secondary">

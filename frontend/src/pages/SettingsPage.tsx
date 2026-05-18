@@ -96,7 +96,7 @@ export function SettingsPage() {
           type="warning"
           showIcon
           message={error}
-          description="已回退到静态概览视图。你仍然可以访问其他页面和实时演示模块。"
+          description="已回退到静态概览视图。你仍然可以访问其他页面。"
           action={
             <Button size="small" onClick={() => void loadPage()}>
               重试
@@ -147,10 +147,6 @@ export function SettingsPage() {
           <a className="overview-link-card" href="/reports">
             <strong>报告中心</strong>
             <span>统一查看 PDF 导出记录，避免手动翻找文件。</span>
-          </a>
-          <a className="overview-link-card" href="/live">
-            <strong>实时演示</strong>
-            <span>进入独立实时用电界面，查看循环周样本与动态预测。</span>
           </a>
         </div>
       </SectionCard>
