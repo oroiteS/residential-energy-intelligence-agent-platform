@@ -40,6 +40,12 @@ TARGET_TYPE_LABELS = {
 
 @dataclass(frozen=True)
 class ModelSpec:
+    """一个参与对比的模型配置。
+
+    metrics_path 指向该模型测试阶段输出的指标文件；
+    kind 用于区分 XGBoost 指标格式和神经网络指标格式。
+    """
+
     key: str
     label: str
     metrics_path: Path
@@ -90,6 +96,8 @@ HORIZON_PLOT_METRICS = ["rmse", "mae", "mape"]
 
 
 def apply_plot_style() -> None:
+    """设置论文/报告风格的 Matplotlib 样式。"""
+
     sns.set_theme(style="ticks", context="paper", font_scale=1.1)
     plt.rcParams.update(
         {
@@ -137,10 +145,15 @@ def extract_target_type(target_name: str) -> str:
 
 
 def load_metrics(spec: ModelSpec) -> pd.DataFrame | None:
+    """读取单个模型的测试指标并统一列格式。"""
+
     if not spec.metrics_path.exists():
         return None
 
     frame = pd.read_csv(spec.metrics_path)
+
+    # XGBoost 训练脚本输出 test_rmse/test_mae 等列；
+    # 神经网络测试脚本输出 rmse/mae 等列，因此这里统一成同一格式。
     if spec.kind == "xgboost":
         frame = frame.rename(
             columns={
@@ -162,6 +175,8 @@ def load_metrics(spec: ModelSpec) -> pd.DataFrame | None:
 
 
 def load_available_results() -> pd.DataFrame:
+    """读取所有已经存在的模型指标文件。"""
+
     frames = [frame for spec in MODEL_SPECS if (frame := load_metrics(spec)) is not None]
     if not frames:
         raise FileNotFoundError("没有找到任何可用的模型测试指标文件")
@@ -183,6 +198,8 @@ def available_target_types(results: pd.DataFrame) -> list[str]:
 
 
 def write_summary_tables(results: pd.DataFrame) -> list[Path]:
+    """写出长表和平均指标表，方便论文或答辩引用。"""
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     saved = []
 
@@ -376,7 +393,11 @@ def plot_rank_summary(results: pd.DataFrame) -> list[Path]:
 
 
 def generate_comparison_figures() -> list[Path]:
-    """读取已有测试结果并生成所有对比图。"""
+    """读取已有测试结果并生成所有对比图。
+
+    生成内容包括平均指标柱状图、预测步长折线图、热力图和排名汇总图。
+    XGBoost 只参与 total 目标的公平对比，神经网络模型参与 total/peak/valley 三类目标。
+    """
     apply_plot_style()
     results = load_available_results()
 

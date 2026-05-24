@@ -25,6 +25,8 @@ matplotlib.rcParams["font.family"] = ["Arial Unicode MS", "DejaVu Sans"]
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 FEATURE_COLUMNS = [
+    # 与分类和 Isolation Forest 共用的 16 维窗口特征。
+    # 规则引擎基于这些特征生成可读的异常原因。
     "avg_energy",
     "std_energy",
     "max_energy",
@@ -48,6 +50,14 @@ FEATURE_COLUMNS = [
 
 @dataclass
 class Rule:
+    """一条可解释异常规则。
+
+    feature 指明检查哪个特征；
+    method 指明使用用户自身 3σ、全局百分位或绝对值百分位；
+    direction 指明异常方向；
+    reason_template 是最终写入报告或前端的解释文本模板。
+    """
+
     name: str
     feature: str  # 检查哪个特征
     method: str   # "sigma" | "percentile" | "abs_percentile"
@@ -61,7 +71,15 @@ class Rule:
         global_p: dict,
         sigma_mult: float,
     ) -> tuple[bool, float]:
+        """判断某个特征值是否触发规则。
+
+        返回值：
+        - triggered: 是否触发；
+        - severity: 偏离程度，后续用于排序或解释。
+        """
+
         if self.method == "sigma":
+            # 用户自身 3σ 规则：判断当前窗口是否明显偏离该用户历史习惯。
             if user_stats is None:
                 return False, 0.0
             mu = user_stats.get("mean", 0.0)
@@ -76,6 +94,7 @@ class Rule:
             return False, abs(z)
 
         elif self.method == "percentile":
+            # 全局百分位规则：判断当前窗口是否位于全体用户分布的极端位置。
             lo = global_p.get(f"{self.feature}_lo", -np.inf)
             hi = global_p.get(f"{self.feature}_hi", np.inf)
             if self.direction == "high" and value > hi:
@@ -90,6 +109,7 @@ class Rule:
             return False, 1.0
 
         elif self.method == "abs_percentile":
+            # 趋势类特征同时关心快速上升和快速下降，因此使用绝对值阈值。
             hi = global_p.get(f"{self.feature}_abs_hi", np.inf)
             if abs(value) > hi:
                 return True, abs(value) / max(hi, 1e-8)
@@ -142,11 +162,15 @@ RULES = [
 # ── 统计计算 ──────────────────────────────────────────────
 
 def load_config(config_path: Path) -> dict:
+    """读取统计规则配置。"""
+
     with config_path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def load_features(features_path: Path) -> pd.DataFrame:
+    """读取窗口特征并校验规则所需列。"""
+
     df = pd.read_csv(features_path, encoding="utf-8")
     missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
     if missing:
@@ -155,7 +179,11 @@ def load_features(features_path: Path) -> pd.DataFrame:
 
 
 def compute_user_stats(df: pd.DataFrame) -> dict[str, dict]:
-    """计算每个用户各特征的历史均值和标准差。"""
+    """计算每个用户各特征的历史均值和标准差。
+
+    用户级统计用于判断“相对自己是否异常”，例如某用户本周是否明显高于自己历史水平。
+    """
+
     grouped = df.groupby("user_id")
     stats: dict[str, dict] = {}
     for uid, group in grouped:
@@ -171,6 +199,11 @@ def compute_user_stats(df: pd.DataFrame) -> dict[str, dict]:
 
 
 def compute_global_percentiles(df: pd.DataFrame, cfg: dict) -> dict[str, float]:
+    """计算全局百分位阈值。
+
+    P5/P95 用于判断“相对全体用户是否极端”，是后端推理阶段规则阈值的来源。
+    """
+
     lo = float(cfg["rules"]["percentile_lower"])
     hi = float(cfg["rules"]["percentile_upper"])
     thresholds: dict[str, float] = {}
@@ -189,6 +222,8 @@ def apply_rules(
     global_p: dict,
     sigma_mult: float,
 ) -> list[dict]:
+    """对单个窗口样本应用全部规则。"""
+
     uid = row["user_id"]
     reasons = []
     for rule in RULES:
@@ -235,7 +270,7 @@ def plot_rule_counts(rule_counter: dict[str, int], output_dir: Path) -> Path:
     names = list(rule_counter.keys())
     counts = list(rule_counter.values())
     labels = [RULE_LABELS_SHORT.get(n, n) for n in names]
-    colors = plt.cm.viridis(np.linspace(0.15, 0.85, len(names)))
+    colors = plt.get_cmap("viridis")(np.linspace(0.15, 0.85, len(names)))
     fig, ax = plt.subplots(figsize=(10, 5))
     bars = ax.barh(labels[::-1], counts[::-1], color=colors[::-1])
     for bar, count in zip(bars, counts[::-1]):
@@ -296,6 +331,8 @@ def plot_rule_cooccurrence(rule_matrix: np.ndarray, rule_names: list[str],
 # ── 主流程 ────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
+    """解析统计规则入口参数。"""
+
     default_config = Path(__file__).resolve().parent / "config" / "default.yaml"
     parser = argparse.ArgumentParser(description="统计规则引擎异常原因解释")
     parser.add_argument("--config", type=Path, default=default_config)
@@ -303,6 +340,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """统计规则主流程。
+
+    先计算用户级统计和全局百分位阈值，再优先解释 Isolation Forest 标记的异常样本；
+    如果没有 Isolation Forest 输出，则对全量窗口应用规则。
+    """
+
     args = parse_args()
     cfg = load_config(args.config)
     sigma_mult = float(cfg["rules"]["sigma_multiplier"])
@@ -311,12 +354,14 @@ def main() -> None:
     output_dir = project_root / cfg["output"]["output_dir"]
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 加载数据
+    # 加载 7 天窗口特征。
     features_path = project_root / cfg["data"]["features_path"]
     df = load_features(features_path)
     print(f"加载样本数：{len(df)}")
 
-    # 计算基准
+    # 计算两类基准：
+    # user_stats 用于用户自身 3σ 偏离；
+    # global_p 用于全体样本 P5/P95 极端值。
     user_stats = compute_user_stats(df)
     print(f"用户统计数：{len(user_stats)}")
 
@@ -336,7 +381,8 @@ def main() -> None:
         json.dump(thresholds, f, ensure_ascii=False, indent=2)
     print(f"规则阈值已保存：{threshold_path}")
 
-    # 确定分析目标：优先用 IForest 标记的异常样本，否则分析全量
+    # 确定分析目标：优先用 IForest 标记的异常样本，否则分析全量。
+    # 这样规则引擎主要承担“解释异常原因”，而不是替代无监督模型筛选异常。
     anomaly_path = project_root / cfg["data"]["anomaly_scores_path"]
     if anomaly_path.exists():
         anomaly_df = pd.read_csv(anomaly_path, encoding="utf-8")
@@ -353,7 +399,7 @@ def main() -> None:
         target = df.copy()
         print(f"未找到 IForest 结果，分析全量样本：{len(target)}")
 
-    # 逐样本应用规则
+    # 逐样本应用规则，并统计每条规则的触发次数。
     rows = []
     rule_counter: dict[str, int] = {}
     rule_idx: dict[str, int] = {}  # rule name → column index

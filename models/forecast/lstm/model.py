@@ -10,6 +10,12 @@ from torch import nn
 
 
 class DirectLSTMNet(nn.Module):
+    """LSTM Direct 网络。
+
+    历史 30 天序列先通过 LSTM 编码，随后与未来日历特征和历史静态统计特征拼接，
+    最后一次性预测未来 7 天的总量、峰时和谷时电量。
+    """
+
     def __init__(
         self,
         *,
@@ -23,6 +29,8 @@ class DirectLSTMNet(nn.Module):
         mlp_hidden_size: int,
     ) -> None:
         super().__init__()
+
+        # 单层 LSTM 中 PyTorch 不会使用 dropout，因此这里显式置为 0。
         lstm_dropout = dropout if num_layers > 1 else 0.0
         self.lstm = nn.LSTM(
             input_size=sequence_feature_size,
@@ -31,6 +39,8 @@ class DirectLSTMNet(nn.Module):
             batch_first=True,
             dropout=lstm_dropout,
         )
+
+        # head 的输入 = LSTM 历史编码 + 未来日历特征 + 静态统计特征。
         self.head = nn.Sequential(
             nn.Linear(hidden_size + future_feature_size + static_feature_size, mlp_hidden_size),
             nn.ReLU(),
@@ -45,6 +55,12 @@ class DirectLSTMNet(nn.Module):
 
 
 class LSTMDirectForecaster(LightningModule):
+    """PyTorch Lightning 封装的 LSTM 直接预测器。
+
+    LightningModule 负责训练步骤、验证步骤、测试步骤、优化器配置和日志记录。
+    target_mean/target_scale 用于把标准化目标还原为真实 kWh。
+    """
+
     def __init__(
         self,
         *,
@@ -85,8 +101,12 @@ class LSTMDirectForecaster(LightningModule):
         self.loss_fn = nn.HuberLoss(delta=1.0)
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+
+        # target_mean/target_scale 是标准化参数，不参与训练，但需要随 checkpoint 保存。
         self.register_buffer("target_mean", torch.tensor(target_mean_list, dtype=torch.float32))
         self.register_buffer("target_scale", torch.tensor(target_scale_list, dtype=torch.float32))
+        self.target_mean: torch.Tensor
+        self.target_scale: torch.Tensor
 
     def forward(self, sequence: torch.Tensor, future: torch.Tensor, static: torch.Tensor) -> torch.Tensor:
         return self.model(sequence, future, static)
@@ -107,6 +127,8 @@ class LSTMDirectForecaster(LightningModule):
         return self.predict_final(batch)
 
     def predict_final(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        """返回反标准化后的 21 维预测结果。"""
+
         prediction_scaled = self(batch["sequence"], batch["future"], batch["static"])
         return self.inverse_target(prediction_scaled)
 

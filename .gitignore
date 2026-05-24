@@ -12,6 +12,8 @@ Thumbs.db
 logs/
 .cache/
 .run/
+*.tmp
+*.temp
 
 # Python
 __pycache__/
@@ -39,6 +41,12 @@ dist-ssr/
 .pnpm-store/
 *.tsbuildinfo
 
+# Frontend local structure notes
+frontend/STRUCTURE*.md
+frontend/struct*.md
+frontend/**/*STRUCTURE*.md
+frontend/**/*struct*.md
+
 # Environment files
 .env
 .env.*
@@ -50,12 +58,33 @@ dist-ssr/
 !*/.env.*.example
 *.local
 
+# Secrets / private local files
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+*secret*
+*secrets*
+*credential*
+*credentials*
+*.sqlite
+*.sqlite3
+*.db
+
 # Local tool metadata
 .claude/
 .codex
 CLAUDE.md
 AGENTS.md
 .qoder/
+
+# Type checker local config
+pyrightconfig.json
+pyrightconfig.toml
+**/pyrightconfig.json
+**/pyrightconfig.toml
 
 # Runtime data / generated outputs
 mysql_data/
@@ -65,6 +94,13 @@ backend/reports/
 frontend/dist/
 models/outputs/
 models/**/output/
+
+# Model backups / experiment snapshots
+models/_result_backups/
+models/**/*backup*/
+models/**/*backups*/
+models/**/*.bak
+models/**/*.backup
 
 # Model artifacts / weights
 backend/models/artifacts/
@@ -103,3 +139,4 @@ test/
 
 # doc
 doc/
+docs/

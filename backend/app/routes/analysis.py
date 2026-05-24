@@ -12,6 +12,8 @@ analysis_bp = Blueprint("analysis", __name__)
 
 @analysis_bp.get("/datasets/<int:dataset_id>/analysis")
 def get_analysis(dataset_id: int):
+    """获取数据集用电分析结果。"""
+
     try:
         return success(get_analysis_payload(dataset_id))
     except ValueError as exc:
@@ -20,5 +22,9 @@ def get_analysis(dataset_id: int):
 
 @analysis_bp.post("/datasets/<int:dataset_id>/analysis/recompute")
 def recompute_analysis(dataset_id: int):
-    return get_analysis(dataset_id)
+    """重新计算分析结果的接口占位。
 
+    当前分析结果在数据集导入时已经生成，因此这里复用查询逻辑。
+    """
+
+    return get_analysis(dataset_id)

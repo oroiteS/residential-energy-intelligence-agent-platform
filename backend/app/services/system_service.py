@@ -6,11 +6,22 @@ from flask import current_app
 
 
 def get_system_config() -> dict:
+    """读取运行时系统配置。
+
+    返回 deepcopy，避免调用方直接修改 Flask config 中的原始对象。
+    """
+
     runtime = current_app.config.setdefault("RUNTIME_SYSTEM_CONFIG", _default_system_config())
     return deepcopy(runtime)
 
 
 def patch_system_config(payload: dict) -> dict:
+    """更新运行时系统配置。
+
+    当前支持峰谷时段配置和模型历史窗口配置；
+    这些配置只保存在当前进程内，不会回写 .env。
+    """
+
     runtime = current_app.config.setdefault("RUNTIME_SYSTEM_CONFIG", _default_system_config())
     if "peak_valley_config" in payload:
         runtime["peak_valley_config"] = payload["peak_valley_config"]
@@ -20,6 +31,8 @@ def patch_system_config(payload: dict) -> dict:
 
 
 def _default_system_config() -> dict:
+    """根据 Flask 配置生成默认系统配置。"""
+
     return {
         "peak_valley_config": {
             "peak": current_app.config["PEAK_PERIODS"],

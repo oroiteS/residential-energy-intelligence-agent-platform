@@ -17,10 +17,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
-    from .data import LSTMForecastDataModule, load_config, resolve_path
+    from .config import load_config, resolve_path
+    from .dataloader import LSTMForecastDataModule
     from .model import LSTMResidualForecaster
 except ImportError:  # 兼容 `python forecast/lstm/test.py`
-    from data import LSTMForecastDataModule, load_config, resolve_path
+    from config import load_config, resolve_path
+    from dataloader import LSTMForecastDataModule
     from model import LSTMResidualForecaster
 
 from forecast.visualization.comparison import generate_comparison_figures

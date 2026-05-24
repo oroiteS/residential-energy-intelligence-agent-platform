@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 # 复用 classification 预处理的核心函数，避免重复维护特征逻辑
+# 异常检测和分类使用同一套 7 天窗口特征，便于后续把“行为类别”和“异常原因”放在同一解释口径下。
 _CLS_DIR = Path(__file__).resolve().parents[1] / "classification"
 if str(_CLS_DIR) not in sys.path:
     sys.path.insert(0, str(_CLS_DIR))
@@ -28,6 +29,8 @@ WINDOW_DAYS = 7
 
 
 def parse_args() -> argparse.Namespace:
+    """解析异常检测预处理命令行参数。"""
+
     data_root = Path(__file__).resolve().parents[1]
     default_source = data_root / "1.2用电查询-用户日冻结-清洗前.csv"
     default_output_dir = Path(__file__).resolve().parent / "output"
@@ -40,6 +43,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """异常检测预处理脚本入口。
+
+    输出 window_features.csv，后续供 Isolation Forest 和统计规则引擎读取。
+    """
+
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 

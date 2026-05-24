@@ -17,10 +17,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
-    from .data import TransformerForecastDataModule, load_config, resolve_path
+    from .config import load_config, resolve_path
+    from .dataloader import TransformerForecastDataModule
     from .model import TransformerResidualForecaster
 except ImportError:  # 兼容 `python forecast/transformer/test.py`
-    from data import TransformerForecastDataModule, load_config, resolve_path
+    from config import load_config, resolve_path
+    from dataloader import TransformerForecastDataModule
     from model import TransformerResidualForecaster
 
 from forecast.visualization.comparison import generate_comparison_figures

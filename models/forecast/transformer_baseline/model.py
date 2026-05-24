@@ -24,12 +24,19 @@ class SinusoidalPositionalEncoding(nn.Module):
         encoding[:, 0::2] = torch.sin(position * div_term)
         encoding[:, 1::2] = torch.cos(position * div_term[: encoding[:, 1::2].shape[1]])
         self.register_buffer("encoding", encoding.unsqueeze(0), persistent=False)
+        self.encoding: torch.Tensor
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.encoding[:, : x.size(1), :]
 
 
 class ResidualTransformerNet(nn.Module):
+    """Transformer 残差网络。
+
+    与直接预测 Transformer 的区别在于输出目标是 XGBoost baseline 的残差，
+    最终预测需要把残差加回 baseline。
+    """
+
     def __init__(
         self,
         *,
@@ -133,6 +140,8 @@ class TransformerResidualForecaster(LightningModule):
         self.weight_decay = weight_decay
         self.register_buffer("target_mean", torch.tensor(target_mean_list, dtype=torch.float32))
         self.register_buffer("target_scale", torch.tensor(target_scale_list, dtype=torch.float32))
+        self.target_mean: torch.Tensor
+        self.target_scale: torch.Tensor
 
     def forward(self, sequence: torch.Tensor, future: torch.Tensor, static: torch.Tensor) -> torch.Tensor:
         return self.model(sequence, future, static)

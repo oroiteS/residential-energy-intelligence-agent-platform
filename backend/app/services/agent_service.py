@@ -51,14 +51,31 @@ CLASSIFICATION_TAXONOMY = [
 
 
 def ask_agent(*, dataset_id: int, question: str, session_id: int | None, history: list[dict] | None) -> dict:
+    """处理一次面向数据集的智能问答。
+
+    整体流程：
+    1. 确认或创建聊天会话；
+    2. 保存用户问题；
+    3. 汇总分析、分类、检测和预测上下文；
+    4. 优先调用 LLM 回答，失败时使用本地规则摘要；
+    5. 保存助手回复并返回结构化结果。
+    """
+
     dataset = get_dataset_or_404(dataset_id)
     session = ChatSession.query.get(session_id) if session_id else None
     if session is None:
+        # 没有 session_id 时自动创建新会话。
+        # 标题取问题前 20 个字符，方便前端会话列表快速识别。
         session_payload = create_session(dataset_id, title=question[:20] or "新会话")
         session = ChatSession.query.get(session_payload["id"])
 
+    if session is None:
+        raise RuntimeError("Failed to create or retrieve chat session")
+
     append_message(session_id=session.id, role="user", content=question)
 
+    # 智能体回答只能基于结构化上下文。
+    # 这比直接把数据库对象交给 LLM 更可控，也方便展示引用证据。
     context = _build_context(dataset_id)
     fallback_payload = _build_fallback_payload(
         session_id=session.id,
@@ -67,6 +84,7 @@ def ask_agent(*, dataset_id: int, question: str, session_id: int | None, history
         error_reason=unavailable_reason(),
     )
 
+    # LLM 可用时走模型回答；不可用时直接返回本地降级结果。
     if can_use_llm():
         payload = _ask_llm(
             session_id=session.id,
@@ -89,6 +107,8 @@ def ask_agent(*, dataset_id: int, question: str, session_id: int | None, history
 
 
 def _build_context(dataset_id: int) -> dict[str, Any]:
+    """构建智能问答使用的结构化上下文。"""
+
     analysis = get_analysis_payload(dataset_id)
     classification = get_latest_classification(dataset_id)
     forecast = get_latest_forecast(dataset_id)
@@ -112,6 +132,11 @@ def _build_context(dataset_id: int) -> dict[str, Any]:
 
 
 def _get_detection_context(dataset_id: int, *, window_role: str, ensure_current: bool = False) -> dict | None:
+    """读取异常检测上下文。
+
+    当前窗口可按需自动生成检测结果；未来窗口只读取已有预测关联结果。
+    """
+
     try:
         if ensure_current and window_role == "current":
             return detection_dto(ensure_current_detection(dataset_id))
@@ -133,6 +158,8 @@ def _build_fallback_payload(
     context: dict[str, Any],
     error_reason: str,
 ) -> dict:
+    """构造不依赖 LLM 的降级问答结果。"""
+
     analysis = context["analysis"]
     classification = context.get("classification")
     forecast = context.get("forecast")
@@ -172,14 +199,27 @@ def _ask_llm(
     context: dict[str, Any],
     fallback: dict,
 ) -> dict:
+    """调用 LLM 生成智能问答回复。
+
+    LangChain 在这里主要承担三件事：
+    1. 用消息对象表示历史对话；
+    2. 用 ChatPromptTemplate 组织 system/human prompt；
+    3. 用 prompt | model 组成可调用链，然后通过 invoke 发起一次模型调用。
+    """
+
     try:
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
         from langchain_core.prompts import ChatPromptTemplate
 
+        # 仅保留最近 12 条历史消息，控制上下文长度。
+        # 历史消息用于保持连续对话感，但核心依据仍来自结构化 context。
         messages = []
         for item in history[-12:]:
             role = item.get("role")
             content = item.get("content", "")
+
+            # LangChain 用不同 Message 类型区分消息角色。
+            # 这些对象会被 ChatPromptTemplate 放进最终请求中，等价于聊天接口里的 role/content。
             if role == "assistant":
                 messages.append(AIMessage(content=content))
             elif role == "system":
@@ -187,7 +227,13 @@ def _ask_llm(
             else:
                 messages.append(HumanMessage(content=content))
 
+        # create_chat_model 返回的是 LangChain 的聊天模型对象。
+        # 它只负责“怎么调用模型”，不包含本项目的业务 prompt。
         model = create_chat_model()
+
+        # Prompt 强制输出 JSON，并要求 citations 从可引用证据中选择。
+        # 前端可以直接渲染 answer、actions、citations 和 missing_information。
+        # from_messages 中的 system 用于设定角色和边界，human 用于放入本次问题和结构化上下文。
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -215,6 +261,9 @@ def _ask_llm(
                         "如果当前证据已经足够回答，必须输出空数组。"
                     ),
                 ),
+
+                # placeholder 会把上面构造的历史消息列表插入到当前位置。
+                # 因此最终顺序是：system 约束 -> 最近对话历史 -> 当前用户问题和上下文。
                 ("placeholder", "{history_messages}"),
                 (
                     "human",
@@ -237,6 +286,10 @@ def _ask_llm(
             context.get("dataset_id"),
             session_id,
         )
+
+        # LangChain 的管道语法：
+        # prompt | model 表示先把变量填入 prompt，生成消息列表，再交给模型调用。
+        # invoke 的参数字典会替换 prompt 里的 {question}、{context_json} 等占位符。
         raw = chain.invoke(
             {
                 "history_messages": messages,
@@ -251,6 +304,10 @@ def _ask_llm(
             target["model"],
             elapsed_ms,
         )
+
+        # LLM 输出要经过解析和字段清洗。
+        # 这样即使模型返回格式略有偏差，接口仍尽量保持稳定结构。
+        # raw.content 是模型文本回复；如果对象没有 content，就退回 str(raw)。
         payload = _parse_llm_payload(getattr(raw, "content", str(raw)), fallback)
         return {
             **payload,
@@ -275,6 +332,8 @@ def _ask_llm(
 
 
 def _sanitize_missing_information(value: Any) -> list[dict]:
+    """清洗 LLM 返回的缺失信息列表。"""
+
     if not isinstance(value, list):
         return []
     items: list[dict] = []
@@ -291,6 +350,8 @@ def _sanitize_missing_information(value: Any) -> list[dict]:
 
 
 def _sanitize_citations(value: Any, fallback: list[dict]) -> list[dict]:
+    """清洗 LLM 返回的引用证据列表。"""
+
     if not isinstance(value, list):
         return fallback
     citations: list[dict] = []
@@ -310,6 +371,8 @@ def _sanitize_citations(value: Any, fallback: list[dict]) -> list[dict]:
 
 
 def _sanitize_actions(value: Any, fallback: list[str]) -> list[str]:
+    """清洗 LLM 返回的行动建议列表。"""
+
     if not isinstance(value, list):
         return fallback
     actions = [str(item).strip() for item in value if str(item).strip()]
@@ -317,6 +380,12 @@ def _sanitize_actions(value: Any, fallback: list[str]) -> list[str]:
 
 
 def _parse_llm_payload(raw: str, fallback: dict) -> dict:
+    """解析 LLM 的 JSON 回复并补齐默认字段。
+
+    虽然 prompt 要求模型输出 JSON，但大模型仍可能返回解释性文本或 Markdown 代码块。
+    因此这里会先提取 JSON，再按接口需要清洗字段。
+    """
+
     raw = _extract_json_text(raw)
     try:
         parsed = json.loads(raw)
@@ -339,6 +408,8 @@ def _parse_llm_payload(raw: str, fallback: dict) -> dict:
 
 
 def _format_detection_line(label: str, detection: dict | None) -> str:
+    """将检测结果压缩成一条问答摘要文本。"""
+
     if not detection:
         return f"{label}暂无结果。"
     status = "建议复核" if detection.get("is_anomaly") else "未触发异常"
@@ -355,6 +426,8 @@ def _format_detection_line(label: str, detection: dict | None) -> str:
 
 
 def _extract_json_text(raw: str) -> str:
+    """从模型文本回复中提取 JSON 对象。"""
+
     text = raw.strip()
     if text.startswith("```"):
         text = text.strip("`").strip()
@@ -368,6 +441,11 @@ def _extract_json_text(raw: str) -> str:
 
 
 def _citations_from_context(context: dict[str, Any]) -> list[dict]:
+    """从结构化上下文中抽取可引用证据。
+
+    LLM 只能引用这些证据，前端也可以用它们展示回答依据。
+    """
+
     analysis = context["analysis"]
     classification = context.get("classification")
     forecast = context.get("forecast")
@@ -407,6 +485,8 @@ def _citations_from_context(context: dict[str, Any]) -> list[dict]:
 
 
 def _infer_intent(question: str) -> str:
+    """根据用户问题粗略判断问答意图。"""
+
     text = question.lower()
     if "预测" in text or "未来" in text:
         return "forecast"

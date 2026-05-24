@@ -24,12 +24,19 @@ class SinusoidalPositionalEncoding(nn.Module):
         encoding[:, 0::2] = torch.sin(position * div_term)
         encoding[:, 1::2] = torch.cos(position * div_term[: encoding[:, 1::2].shape[1]])
         self.register_buffer("encoding", encoding.unsqueeze(0), persistent=False)
+        self.encoding: torch.Tensor
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.encoding[:, : x.size(1), :]
 
 
 class DirectTransformerNet(nn.Module):
+    """Transformer Direct 网络。
+
+    历史 30 天序列先投影到 d_model 维，再加位置编码进入 Transformer Encoder；
+    编码结果与未来日历特征、静态统计特征拼接后，一次性输出 21 个预测目标。
+    """
+
     def __init__(
         self,
         *,
@@ -53,6 +60,8 @@ class DirectTransformerNet(nn.Module):
             raise ValueError("pooling 只能是 mean 或 last")
 
         self.pooling = pooling
+
+        # 将每日原始特征映射到 Transformer 使用的 d_model 维空间。
         self.input_projection = nn.Linear(sequence_feature_size, d_model)
         self.position_encoding = SinusoidalPositionalEncoding(d_model=d_model, max_len=input_days)
         encoder_layer = nn.TransformerEncoderLayer(
@@ -77,6 +86,9 @@ class DirectTransformerNet(nn.Module):
         encoded_sequence = self.input_projection(sequence)
         encoded_sequence = self.position_encoding(encoded_sequence)
         encoded_sequence = self.encoder(encoded_sequence)
+
+        # pooling 决定如何把 30 天编码序列压缩为一个历史表示。
+        # mean 使用全窗口平均，last 使用最后一天的编码。
         if self.pooling == "last":
             encoded = encoded_sequence[:, -1, :]
         else:
@@ -133,6 +145,8 @@ class TransformerDirectForecaster(LightningModule):
         self.weight_decay = weight_decay
         self.register_buffer("target_mean", torch.tensor(target_mean_list, dtype=torch.float32))
         self.register_buffer("target_scale", torch.tensor(target_scale_list, dtype=torch.float32))
+        self.target_mean: torch.Tensor
+        self.target_scale: torch.Tensor
 
     def forward(self, sequence: torch.Tensor, future: torch.Tensor, static: torch.Tensor) -> torch.Tensor:
         return self.model(sequence, future, static)
@@ -178,7 +192,9 @@ class TransformerDirectForecaster(LightningModule):
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
-        # 前 10% steps 线性 warmup，之后 cosine decay 到 lr * 0.1
+
+        # 前 10% steps 线性 warmup，之后 cosine decay 到 lr * 0.1。
+        # Transformer 对学习率更敏感，warmup 可以降低训练初期不稳定。
         total_steps = self.trainer.estimated_stepping_batches
         warmup_steps = max(1, int(total_steps * 0.1))
 

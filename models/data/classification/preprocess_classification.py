@@ -17,6 +17,9 @@ from statistics import mean, pstdev, median
 
 
 WINDOW_DAYS = 7
+
+# 原始 1.2 日冻结表中 type 字段的业务含义：
+# 1 表示日总用电量，2 表示峰时用电量，3 表示谷时用电量。
 TYPE_TOTAL = "1"
 TYPE_PEAK = "2"
 TYPE_VALLEY = "3"
@@ -28,6 +31,12 @@ PEAK_MONTHS_WINTER = {1, 12}         # 冬季尖峰月
 
 @dataclass(frozen=True)
 class DayRecord:
+    """单个用户某一天的日级用电记录。
+
+    该结构把原始宽表中的总量、峰时、谷时三行合并为一条日记录，
+    后续 7 天窗口特征都基于 DayRecord 列表计算。
+    """
+
     user_id: str
     date: datetime
     energy: float
@@ -48,18 +57,37 @@ class DayRecord:
 
 
 def normalize_id(raw_id: str) -> str:
+    """规范化用户编号。
+
+    原始脱敏 id 中可能带有千分位逗号，这里去掉逗号以便分组和连接。
+    """
+
     return raw_id.replace(",", "").strip()
 
 
 def parse_date(raw_date: str) -> datetime:
+    """解析原始宽表中的日期列名。"""
+
     return datetime.strptime(raw_date, "%Y/%m/%d")
 
 
 def load_daily_records(source_path: Path) -> dict[str, list[DayRecord]]:
-    """读取 1.2 宽表，按用户分组返回日记录列表（已排序）。"""
+    """读取 1.2 宽表，按用户分组返回日记录列表。
+
+    输入数据形态：
+    - 每个用户有 3 行，type=1/2/3 分别表示总量/峰时/谷时；
+    - 日期以宽表列存在，例如 2017/1/1、2017/1/2。
+
+    输出数据形态：
+    - dict[user_id, list[DayRecord]]；
+    - 每个用户的日记录按日期升序排列。
+    """
+
     user_type_values: dict[str, dict[str, list[str]]] = {}
     date_columns: list[str] = []
 
+    # 先按 user_id 和 type 暂存宽表数据。
+    # 这样可以在第二阶段把同一用户的三种电量合并为 DayRecord。
     with source_path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
         header = next(reader)
@@ -73,6 +101,7 @@ def load_daily_records(source_path: Path) -> dict[str, list[DayRecord]]:
     records_by_user: dict[str, list[DayRecord]] = {}
 
     for uid, by_type in user_type_values.items():
+        # 缺少总量、峰时或谷时任意一种记录的用户无法构造完整行为特征。
         missing = {TYPE_TOTAL, TYPE_PEAK, TYPE_VALLEY} - set(by_type)
         if missing:
             continue
@@ -90,6 +119,8 @@ def load_daily_records(source_path: Path) -> dict[str, list[DayRecord]]:
             if e < 0 or p < 0 or v < 0:
                 continue
             user_records.append(DayRecord(uid, date, e, p, v))
+
+        # 保证后续滑动窗口严格按时间顺序切分。
         user_records.sort(key=lambda r: r.date)
         records_by_user[uid] = user_records
 
@@ -97,7 +128,14 @@ def load_daily_records(source_path: Path) -> dict[str, list[DayRecord]]:
 
 
 def extract_window_features(window: list[DayRecord]) -> dict[str, float]:
-    """从一个 7 天窗口提取行为特征。所有特征均可从用户上传的日电量明细计算。"""
+    """从一个 7 天窗口提取行为特征。
+
+    特征维度固定为 16 维，覆盖用电总量、峰谷结构、工作日/周末差异、
+    趋势、波动和抗异常值指标。KMeans 聚类和 XGBoost 分类共用这套特征。
+    """
+
+    # 窗口中的三条核心序列。
+    # energy 是总用电，peaks/valleys 分别用于描述峰谷结构。
     energies = [r.energy for r in window]
     peaks = [r.peak_energy for r in window]
     valleys = [r.valley_energy for r in window]
@@ -113,15 +151,17 @@ def extract_window_features(window: list[DayRecord]) -> dict[str, float]:
     total_valley = sum(valleys)
     total_e = sum(energies)
 
-    # 峰谷比（谷接近0时保护分母）
+    # 峰谷比（谷接近 0 时保护分母）。
     peak_valley_ratio = total_peak / (total_valley + 1e-6)
-    # 峰电占比
+
+    # 峰电占比和谷电占比用于刻画用户用电更多发生在哪个时段。
     peak_ratio = total_peak / (total_e + 1e-6)
-    # 谷电占比
     valley_ratio = total_valley / (total_e + 1e-6)
-    # 负荷均衡度（越接近1越均衡）
+
+    # 负荷均衡度越接近 1，说明 7 天内日用电越平稳。
     load_factor = avg_e / (max_e + 1e-6)
 
+    # 工作日/周末均值差异用于反映居家作息模式。
     workday_e = [r.energy for r in window if not r.is_weekend]
     weekend_e = [r.energy for r in window if r.is_weekend]
     workday_avg = mean(workday_e) if workday_e else avg_e
@@ -167,6 +207,8 @@ def extract_window_features(window: list[DayRecord]) -> dict[str, float]:
 
 
 FEATURE_COLUMNS = [
+    # 该顺序是训练和推理的统一输入顺序。
+    # 修改这里会影响 KMeans、XGBoost 和异常检测规则的特征对齐。
     "avg_energy",
     "std_energy",
     "max_energy",
@@ -190,16 +232,23 @@ def build_window_samples(
     records_by_user: dict[str, list[DayRecord]],
     window_days: int,
 ) -> list[dict]:
-    """滑动切分所有用户的时间序列，生成特征样本列表。"""
+    """滑动切分所有用户的时间序列，生成特征样本列表。
+
+    默认 window_days=7，即每个样本代表某用户连续 7 天的用电行为。
+    对于 365 天数据，一个用户大约可产生 365 - 7 + 1 个窗口样本。
+    """
+
     samples = []
     for uid, records in sorted(records_by_user.items()):
         n = len(records)
         if n < window_days:
             continue
+
+        # 使用步长为 1 天的滑动窗口，让模型学习连续时间上的行为变化。
         for start in range(n - window_days + 1):
             window = records[start : start + window_days]
             feats = extract_window_features(window)
-            row = {
+            row: dict[str, str | float] = {
                 "user_id": uid,
                 "window_start": window[0].date.strftime("%Y-%m-%d"),
                 "window_end": window[-1].date.strftime("%Y-%m-%d"),
@@ -210,6 +259,11 @@ def build_window_samples(
 
 
 def write_samples(samples: list[dict], output_path: Path) -> None:
+    """写出窗口特征 CSV。
+
+    输出文件是后续 KMeans 聚类、XGBoost 分类和异常检测的共同输入之一。
+    """
+
     fieldnames = ["user_id", "window_start", "window_end"] + FEATURE_COLUMNS
     with output_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -219,6 +273,8 @@ def write_samples(samples: list[dict], output_path: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """解析命令行参数。"""
+
     data_root = Path(__file__).resolve().parents[1]
     default_source = data_root / "1.2用电查询-用户日冻结-清洗前.csv"
     default_output_dir = Path(__file__).resolve().parent / "output"
@@ -231,6 +287,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """分类预处理脚本入口。"""
+
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 

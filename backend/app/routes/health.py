@@ -11,5 +11,6 @@ health_bp = Blueprint("health", __name__)
 
 @health_bp.get("/health")
 def get_health():
-    return success(get_health_payload())
+    """健康检查接口。"""
 
+    return success(get_health_payload())

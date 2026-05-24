@@ -11,14 +11,18 @@ from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, Mode
 from lightning.pytorch.loggers import CSVLogger
 
 try:
-    from .data import LSTMForecastDataModule, load_config, resolve_path
+    from .config import load_config, resolve_path
+    from .dataloader import LSTMForecastDataModule
     from .model import LSTMDirectForecaster
 except ImportError:  # 兼容 `python forecast/lstm/train.py`
-    from data import LSTMForecastDataModule, load_config, resolve_path
+    from config import load_config, resolve_path
+    from dataloader import LSTMForecastDataModule
     from model import LSTMDirectForecaster
 
 
 def parse_args() -> argparse.Namespace:
+    """解析 LSTM Direct 训练参数。"""
+
     parser = argparse.ArgumentParser(description="训练 LSTM 直接预测模型")
     parser.add_argument(
         "--config",
@@ -31,6 +35,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def train(config_path: Path, *, no_resume: bool = False) -> None:
+    """训练 LSTM Direct 预测模型。
+
+    训练目标是未来 7 天的总量、峰时、谷时共 21 维；
+    使用 EarlyStopping 监控 valid_rmse，并保存最优 checkpoint。
+    """
+
     config = load_config(config_path)
     L.seed_everything(int(config["training"]["random_seed"]), workers=True)
 
@@ -44,6 +54,9 @@ def train(config_path: Path, *, no_resume: bool = False) -> None:
     datamodule = LSTMForecastDataModule(config)
     datamodule.setup("fit")
     datamodule.write_feature_file(feature_file)
+
+    # 目标标准化参数写入 LightningModule 的 hparams/buffer。
+    # 后端加载 checkpoint 推理时可以直接做反标准化。
     target_mean, target_scale = datamodule.target_scaler_state()
     target_mean = [float(value) for value in target_mean]
     target_scale = [float(value) for value in target_scale]

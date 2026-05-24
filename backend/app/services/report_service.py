@@ -24,17 +24,34 @@ from app.services.llm_client import can_use_llm, create_chat_model, llm_log_targ
 
 
 def list_reports(dataset_id: int) -> list[dict]:
+    """列出某个数据集已经生成的报告。"""
+
     records = Report.query.filter_by(dataset_id=dataset_id).order_by(Report.created_at.desc()).all()
     return [report_dto(item) for item in records]
 
 
 def export_report(dataset_id: int) -> dict:
+    """导出数据集 PDF 分析报告。
+
+    整体流程：
+    1. 汇总数据集、分析、分类、检测和预测上下文；
+    2. 优先调用 LLM 生成报告摘要，失败时使用本地摘要；
+    3. 组装 Markdown 报告；
+    4. 调用 md2pdf 脚本渲染 PDF；
+    5. 将报告文件记录写入数据库。
+    """
+
     dataset = get_dataset_or_404(dataset_id)
     current_app.logger.info("[report] 开始导出报告 dataset_id=%s name=%s", dataset.id, dataset.name)
+
+    # 报告生成先构造结构化上下文。
+    # LLM 和本地降级摘要都只基于这份上下文，避免生成无法追溯的数据。
     context = _build_report_context(dataset_id)
     summary = _summarize_report_with_llm(context)
     markdown = _build_markdown_report(context, summary)
 
+    # Markdown 和 PDF 分开保存。
+    # Markdown 便于排查报告内容，PDF 是最终给用户下载的交付物。
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     stem = f"report_{dataset.id}_{timestamp}"
     markdown_path = _absolute_storage_path(current_app.config["REPORT_MARKDOWN_DIR"] / f"{stem}.md")
@@ -52,6 +69,7 @@ def export_report(dataset_id: int) -> dict:
     if not file_path.exists():
         raise ServiceUnavailableError("PDF 渲染完成但未产出文件", code="PDF_FILE_MISSING")
 
+    # PDF 生成成功后才写数据库记录，避免前端看到不存在的报告。
     report = Report(
         dataset_id=dataset.id,
         report_type="pdf",
@@ -71,6 +89,8 @@ def export_report(dataset_id: int) -> dict:
 
 
 def get_report_file(report_id: int) -> Path:
+    """定位报告文件下载路径。"""
+
     report = Report.query.get(report_id)
     if report is None:
         raise NotFoundError("报告不存在", code="REPORT_NOT_FOUND")
@@ -82,6 +102,8 @@ def get_report_file(report_id: int) -> Path:
 
 
 def report_dto(record: Report) -> dict:
+    """转换报告记录为接口返回结构。"""
+
     return {
         "id": record.id,
         "dataset_id": record.dataset_id,
@@ -93,6 +115,12 @@ def report_dto(record: Report) -> dict:
 
 
 def _build_report_context(dataset_id: int) -> dict[str, Any]:
+    """构造报告生成所需的结构化上下文。
+
+    上下文包含数据集元信息、分析结果、当前分类、当前检测、最新预测和未来检测。
+    这是报告内容唯一的数据来源。
+    """
+
     dataset = get_dataset_or_404(dataset_id)
     analysis = get_analysis_payload(dataset_id)
     classification = get_latest_classification(dataset_id)
@@ -130,6 +158,13 @@ def _build_report_context(dataset_id: int) -> dict[str, Any]:
 
 
 def _summarize_report_with_llm(context: dict[str, Any]) -> dict[str, Any]:
+    """使用 LLM 生成报告摘要，失败时回退到本地摘要。
+
+    这里的 LangChain 用法比智能问答更简单：
+    没有历史消息，只把报告上下文填入 ChatPromptTemplate，
+    再通过 prompt | ChatOpenAI 发送给大模型。
+    """
+
     fallback = _fallback_summary(context, error_reason=unavailable_reason())
     if not can_use_llm():
         current_app.logger.info("[llm][report] 未调用大模型，使用本地报告摘要 reason=%s", fallback["error_reason"])
@@ -138,6 +173,9 @@ def _summarize_report_with_llm(context: dict[str, Any]) -> dict[str, Any]:
     try:
         from langchain_core.prompts import ChatPromptTemplate
 
+        # Prompt 明确限制只能基于结构化数据写报告。
+        # 这能降低大模型编造设备原因、夸大风险或输出非 JSON 的概率。
+        # system 消息规定报告写作边界；human 消息给出具体输出格式和 context_json。
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -176,6 +214,10 @@ def _summarize_report_with_llm(context: dict[str, Any]) -> dict[str, Any]:
             target["model"],
             context["dataset"]["id"],
         )
+
+        # prompt | model 是 LangChain 的链式调用写法。
+        # invoke 传入 context_json 后，LangChain 会先渲染 prompt，再调用 ChatOpenAI。
+        # 返回值通常是 AIMessage，正文在 content 字段中。
         raw = (prompt | create_chat_model(timeout_seconds=current_app.config["LLM_REPORT_TIMEOUT_SECONDS"])).invoke(
             {"context_json": json.dumps(context, ensure_ascii=False, default=str)}
         )
@@ -185,6 +227,9 @@ def _summarize_report_with_llm(context: dict[str, Any]) -> dict[str, Any]:
             target["model"],
             elapsed_ms,
         )
+
+        # LLM 输出会先解析为 JSON，再经过业务安全清洗。
+        # 清洗主要用于修正与峰谷业务口径冲突的建议。
         parsed = _sanitize_summary(
             _parse_summary_payload(getattr(raw, "content", str(raw)), fallback),
             context,
@@ -204,6 +249,12 @@ def _summarize_report_with_llm(context: dict[str, Any]) -> dict[str, Any]:
 
 
 def _parse_summary_payload(raw: str, fallback: dict[str, Any]) -> dict[str, Any]:
+    """解析 LLM 返回的报告摘要 JSON。
+
+    报告生成要求模型返回 title、overview、sections、recommendations。
+    如果模型没有严格返回 JSON 或字段缺失，则回退到本地摘要中的对应内容。
+    """
+
     text = _extract_json_text(raw)
     try:
         parsed = json.loads(text)
@@ -238,6 +289,8 @@ def _parse_summary_payload(raw: str, fallback: dict[str, Any]) -> dict[str, Any]
 
 
 def _sanitize_summary(summary: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """清洗报告摘要中的不合理峰谷建议。"""
+
     peak_ratio = _safe_float(context.get("analysis", {}).get("summary", {}).get("peak_ratio"))
     if peak_ratio is None:
         return summary
@@ -262,6 +315,12 @@ def _sanitize_summary(summary: dict[str, Any], context: dict[str, Any]) -> dict[
 
 
 def _fallback_summary(context: dict[str, Any], *, error_reason: str) -> dict[str, Any]:
+    """构造不依赖 LLM 的本地报告摘要。
+
+    当 LLM 配置缺失、依赖缺失或请求失败时使用该摘要；
+    这样报告导出能力不会完全依赖外部模型服务。
+    """
+
     dataset = context["dataset"]
     analysis_summary = context["analysis"]["summary"]
     classification = context.get("classification")
@@ -318,6 +377,8 @@ def _fallback_summary(context: dict[str, Any], *, error_reason: str) -> dict[str
 
 
 def _build_markdown_report(context: dict[str, Any], summary: dict[str, Any]) -> str:
+    """将结构化上下文和摘要组装为 Markdown 报告。"""
+
     dataset = context["dataset"]
     analysis = context["analysis"]["summary"]
     forecast = context.get("forecast")
@@ -346,6 +407,8 @@ def _build_markdown_report(context: dict[str, Any], summary: dict[str, Any]) -> 
     ]
 
     if forecast:
+        # 预测明细最多展示未来 7 天。
+        # 这与当前 LSTM Direct 模型固定 7 天预测窗口保持一致。
         lines.extend(
             [
                 "## 未来 7 天预测明细",
@@ -376,8 +439,13 @@ def _build_markdown_report(context: dict[str, Any], summary: dict[str, Any]) -> 
 
 
 def _render_markdown_to_pdf(*, markdown_path: Path, pdf_path: Path, title: str) -> None:
+    """调用内置 md2pdf 脚本将 Markdown 渲染为 PDF。"""
+
     script_path = _resolve_md2pdf_script()
     current_app.logger.info("[report] 开始渲染 PDF markdown=%s output=%s", markdown_path, pdf_path)
+
+    # 先渲染到临时目录，再复制到最终路径。
+    # 这样可以避免渲染失败时留下半成品 PDF。
     with tempfile.TemporaryDirectory(prefix="md2pdf_", dir=str(current_app.config["REPORT_DIR"])) as temp_dir:
         temp_pdf = Path(temp_dir) / "report.pdf"
         command = [
@@ -431,6 +499,8 @@ def _render_markdown_to_pdf(*, markdown_path: Path, pdf_path: Path, title: str) 
 
 
 def _resolve_md2pdf_script() -> Path:
+    """解析 md2pdf 脚本路径。"""
+
     configured = Path(current_app.config["MD2PDF_SCRIPT_PATH"])
     candidates = [configured]
     if not configured.is_absolute():
@@ -443,6 +513,8 @@ def _resolve_md2pdf_script() -> Path:
 
 
 def _resolve_report_path(value: str) -> Path:
+    """兼容绝对路径和相对路径形式的报告文件位置。"""
+
     path = Path(value)
     if path.is_absolute():
         return path
@@ -459,10 +531,14 @@ def _resolve_report_path(value: str) -> Path:
 
 
 def _absolute_storage_path(path: Path) -> Path:
+    """将存储路径转换为绝对路径。"""
+
     return path if path.is_absolute() else (Path(current_app.root_path).parent / path).resolve()
 
 
 def _extract_json_text(raw: str) -> str:
+    """从 LLM 回复中提取 JSON 文本。"""
+
     text = raw.strip()
     if text.startswith("```"):
         text = text.strip("`").strip()
@@ -476,6 +552,8 @@ def _extract_json_text(raw: str) -> str:
 
 
 def _detection_text(detection: dict | None) -> str:
+    """将异常检测结果转换为报告中的一句解释文本。"""
+
     if not detection:
         return "当前尚未生成异常检测结果。"
     status = "建议复核" if detection.get("is_anomaly") else "未触发复核"
@@ -485,6 +563,8 @@ def _detection_text(detection: dict | None) -> str:
 
 
 def _fmt_number(value: Any) -> str:
+    """格式化数值，缺失或非法时显示“暂无”。"""
+
     try:
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
@@ -492,6 +572,8 @@ def _fmt_number(value: Any) -> str:
 
 
 def _safe_float(value: Any) -> float | None:
+    """安全转换浮点数，失败时返回 None。"""
+
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -499,6 +581,8 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _percent(value: Any) -> str:
+    """将比例或百分数格式化为百分比文本。"""
+
     try:
         ratio = float(value)
     except (TypeError, ValueError):
@@ -509,6 +593,8 @@ def _percent(value: Any) -> str:
 
 
 def _fmt_dt(value: Any) -> str:
+    """格式化日期时间文本用于报告展示。"""
+
     if not value:
         return "暂无"
     text = str(value)

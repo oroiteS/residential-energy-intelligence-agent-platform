@@ -11,14 +11,18 @@ from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, Mode
 from lightning.pytorch.loggers import CSVLogger
 
 try:
-    from .data import LSTMForecastDataModule, load_config, resolve_path
+    from .config import load_config, resolve_path
+    from .dataloader import LSTMForecastDataModule
     from .model import LSTMResidualForecaster
 except ImportError:  # 兼容 `python forecast/lstm/train.py`
-    from data import LSTMForecastDataModule, load_config, resolve_path
+    from config import load_config, resolve_path
+    from dataloader import LSTMForecastDataModule
     from model import LSTMResidualForecaster
 
 
 def parse_args() -> argparse.Namespace:
+    """解析 LSTM 残差模型训练参数。"""
+
     parser = argparse.ArgumentParser(description="训练 LSTM 残差预测模型")
     parser.add_argument(
         "--config",
@@ -31,6 +35,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def train(config_path: Path, *, no_resume: bool = False) -> None:
+    """训练 LSTM 残差 baseline 模型。
+
+    模型学习的是真实 21 维目标相对 XGBoost baseline 的残差，
+    最终评估时会把预测残差加回 baseline。
+    """
+
     config = load_config(config_path)
     L.seed_everything(int(config["training"]["random_seed"]), workers=True)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import pickle
 from functools import lru_cache
-from typing import Sequence
+from typing import Any, Protocol, Sequence, cast
 
 import numpy as np
 
@@ -11,23 +11,43 @@ from models.classification import FEATURE_COLUMNS, extract_window_features
 from models.common import ARTIFACTS_DIR
 
 
+class IsolationForestLike(Protocol):
+    """异常检测模型的最小推理协议。"""
+
+    def decision_function(self, X: Any) -> Any: ...
+
+    def predict(self, X: Any) -> Any: ...
+
+
 @lru_cache(maxsize=1)
-def _load_detection_artifacts() -> tuple[object, dict]:
+def _load_detection_artifacts() -> tuple[IsolationForestLike, dict]:
+    """加载异常检测模型和统计规则阈值。"""
+
     iforest_path = ARTIFACTS_DIR / "detection" / "isolation_forest" / "isolation_forest.pkl"
     thresholds_path = ARTIFACTS_DIR / "detection" / "statistical_rules" / "rule_thresholds.json"
     with iforest_path.open("rb") as file:
-        model = pickle.load(file)
+        model = cast(IsolationForestLike, pickle.load(file))
     thresholds = json.loads(thresholds_path.read_text(encoding="utf-8"))
     return model, thresholds
 
 
 def detect_daily_window(window_rows: Sequence[dict], history_rows: Sequence[dict], *, window_role: str) -> dict:
+    """对一个日级窗口执行异常检测。
+
+    Isolation Forest 给出整体异常分数；
+    统计规则补充可解释原因，两者任一触发都会标记为异常。
+    """
+
     if not window_rows:
         raise ValueError("异常检测窗口不能为空")
 
+    # 检测复用分类特征，保证“分类解释”和“异常解释”基于同一组窗口指标。
     features = extract_window_features(window_rows)
     model, thresholds = _load_detection_artifacts()
     vector = np.array([[features[column] for column in FEATURE_COLUMNS]], dtype=np.float64)
+
+    # decision_function 越低通常表示越异常；
+    # predict 输出 -1 表示 Isolation Forest 判定为异常点。
     score = float(model.decision_function(vector)[0])
     label = int(model.predict(vector)[0])
     reasons = _apply_rules(features, thresholds)
@@ -48,8 +68,17 @@ def detect_daily_window(window_rows: Sequence[dict], history_rows: Sequence[dict
 
 
 def _apply_rules(features: dict[str, float], thresholds: dict) -> list[dict]:
+    """应用统计阈值规则生成异常原因。
+
+    thresholds 中的 P5/P95 来自训练或统计样本；
+    高于 P95 或低于 P5 的特征会生成可解释的复核原因。
+    """
+
     p5 = thresholds.get("P5", {})
     p95 = thresholds.get("P95", {})
+
+    # 规则列表集中定义“检查哪个特征、看高还是低、触发后如何解释”。
+    # 这样后续调整解释文案或阈值方向时不需要改检测主流程。
     rules = [
         (
             "avg_energy_global_high",
@@ -160,6 +189,7 @@ def _apply_rules(features: dict[str, float], thresholds: dict) -> list[dict]:
                 }
             )
 
+    # trend_rel 同时关心快速上升和快速下降，因此使用绝对值和双侧阈值判断。
     trend_value = abs(float(features["trend_rel"]))
     trend_low_threshold = float(p5.get("trend_rel", 0.0))
     trend_high_threshold = float(p95.get("trend_rel", 0.0))
@@ -179,6 +209,8 @@ def _apply_rules(features: dict[str, float], thresholds: dict) -> list[dict]:
 
 
 def _severity(score: float, reasons: list[dict]) -> str:
+    """根据模型分数和规则数量估计异常严重程度。"""
+
     if score < -0.08 or len(reasons) >= 3:
         return "high"
     if score < 0 or reasons:

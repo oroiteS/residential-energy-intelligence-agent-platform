@@ -11,10 +11,12 @@ from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, Mode
 from lightning.pytorch.loggers import CSVLogger
 
 try:
-    from .data import TransformerForecastDataModule, load_config, resolve_path
+    from .config import load_config, resolve_path
+    from .dataloader import TransformerForecastDataModule
     from .model import TransformerDirectForecaster
 except ImportError:  # 兼容 `python forecast/transformer/train.py`
-    from data import TransformerForecastDataModule, load_config, resolve_path
+    from config import load_config, resolve_path
+    from dataloader import TransformerForecastDataModule
     from model import TransformerDirectForecaster
 
 

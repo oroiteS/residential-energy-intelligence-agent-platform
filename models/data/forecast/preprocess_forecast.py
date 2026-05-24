@@ -20,11 +20,20 @@ from statistics import mean, pstdev
 TYPE_TOTAL = "1"
 TYPE_PEAK = "2"
 TYPE_VALLEY = "3"
+
+# 一周 7 天用于构造星期周期特征。
+# sin/cos 比直接使用 0-6 编号更能表达“周日和周一相邻”的循环关系。
 WEEK_CYCLE = 7.0
 
 
 @dataclass(frozen=True)
 class DayRecord:
+    """单个用户某一天的预测任务记录。
+
+    该结构把日总量、峰时、谷时电量和日历特征放在一起，
+    既可写出日级长表，也可进一步构造 30 天历史到 7 天未来的监督学习样本。
+    """
+
     user_id: str
     date: datetime
     energy: float
@@ -66,10 +75,14 @@ def normalize_id(raw_id: str) -> str:
 
 
 def parse_date(raw_date: str) -> datetime:
+    """解析原始宽表日期列名。"""
+
     return datetime.strptime(raw_date, "%Y/%m/%d")
 
 
 def parse_float(raw_value: str, *, row_id: str, date: str) -> float:
+    """解析电量值并给出可定位的错误信息。"""
+
     value = raw_value.strip()
     if value == "":
         raise ValueError(f"发现空电量值：用户={row_id}，日期={date}")
@@ -77,7 +90,12 @@ def parse_float(raw_value: str, *, row_id: str, date: str) -> float:
 
 
 def load_daily_records(source_path: Path) -> list[DayRecord]:
-    """读取 1.2 宽表并转换为日级长表。"""
+    """读取 1.2 宽表并转换为日级长表。
+
+    输入数据为“用户 × type × 日期”的宽表；
+    输出数据为按 user_id、date 排序的 DayRecord 列表。
+    """
+
     user_type_values: dict[str, dict[str, list[str]]] = {}
 
     with source_path.open("r", encoding="utf-8-sig", newline="") as file:
@@ -94,6 +112,8 @@ def load_daily_records(source_path: Path) -> list[DayRecord]:
     records: list[DayRecord] = []
 
     for user_id, values_by_type in user_type_values.items():
+        # 每个用户必须同时具备总量、峰时和谷时三类数据。
+        # 预测任务需要同时学习这三类目标，因此这里严格报错。
         missing_types = {TYPE_TOTAL, TYPE_PEAK, TYPE_VALLEY} - set(values_by_type)
         if missing_types:
             raise ValueError(f"用户 {user_id} 缺少 type={sorted(missing_types)} 的记录")
@@ -114,6 +134,8 @@ def load_daily_records(source_path: Path) -> list[DayRecord]:
             if energy < 0 or peak_energy < 0 or valley_energy < 0:
                 raise ValueError(f"发现负电量：用户={user_id}，日期={date_text}")
 
+            # 这里仍保持日级粒度。
+            # 后续模型样本会在 write_supervised_samples 中按窗口切分。
             records.append(
                 DayRecord(
                     user_id=user_id,
@@ -129,6 +151,12 @@ def load_daily_records(source_path: Path) -> list[DayRecord]:
 
 
 def write_daily_records(records: list[DayRecord], output_path: Path) -> None:
+    """写出日级长表。
+
+    输出字段包括用电量、峰谷电量和星期周期特征；
+    该文件便于人工检查，也可作为其他模型或可视化的基础数据。
+    """
+
     fieldnames = [
         "user_id",
         "date",
@@ -165,6 +193,15 @@ def write_daily_records(records: list[DayRecord], output_path: Path) -> None:
 
 
 def build_sample_header(input_days: int, output_days: int) -> list[str]:
+    """构造监督学习样本表头。
+
+    默认 input_days=30、output_days=7：
+    - x_* 表示过去 30 天逐日历史输入；
+    - future_* 表示未来 7 天已知日历特征；
+    - hist_* 表示历史窗口统计特征；
+    - y_* 表示未来 7 天预测目标。
+    """
+
     fieldnames = [
         "user_id",
         "window_start_date",
@@ -241,6 +278,8 @@ def build_sample_header(input_days: int, output_days: int) -> list[str]:
 
 
 def mean_or_nan(values: list[float]) -> float:
+    """空列表安全的均值计算。"""
+
     return mean(values) if values else math.nan
 
 
@@ -251,6 +290,14 @@ def build_sample_row(
     input_days: int,
     output_days: int,
 ) -> dict[str, str | int]:
+    """构造一个 30 天历史到 7 天未来的监督学习样本。
+
+    history 提供模型输入，future 提供训练目标；
+    行内同时保存未来日历特征，因为预测时未来日期是已知的。
+    """
+
+    # 历史窗口中的三组用电序列。
+    # 后续 hist_* 统计特征都从这些序列派生。
     history_energy = [record.energy for record in history]
     history_peak = [record.peak_energy for record in history]
     history_valley = [record.valley_energy for record in history]
@@ -264,7 +311,8 @@ def build_sample_row(
     weekend_mean = mean_or_nan(weekend_values)
     workday_mean = mean_or_nan(workday_values)
 
-    # 历史 30 天峰时占比的中位数，用于推导预测峰/谷（baseline）
+    # 历史 30 天峰时占比的中位数，用于推导预测峰/谷（baseline）。
+    # 中位数比均值更不容易被极端高峰日影响。
     peak_ratios = sorted(
         r.peak_ratio for r in history if not math.isnan(r.peak_ratio)
     )
@@ -285,6 +333,8 @@ def build_sample_row(
         "forecast_end_date": future[-1].date.strftime("%Y-%m-%d"),
     }
 
+    # 写入过去 input_days 天的逐日输入特征。
+    # 每天包含总量、峰时、谷时和星期周期信息。
     for index, record in enumerate(history, start=1):
         row[f"x_energy_d{index:02d}"] = f"{record.energy:.6f}"
         row[f"x_peak_energy_d{index:02d}"] = f"{record.peak_energy:.6f}"
@@ -293,6 +343,7 @@ def build_sample_row(
         row[f"x_weekday_cos_d{index:02d}"] = f"{record.weekday_cos:.6f}"
         row[f"x_is_weekend_d{index:02d}"] = record.is_weekend
 
+    # 未来日期在预测时也是已知信息，因此只写未来日历特征，不写未来真实电量作为输入。
     for index, record in enumerate(future, start=1):
         row[f"future_weekday_sin_d{index:02d}"] = f"{record.weekday_sin:.6f}"
         row[f"future_weekday_cos_d{index:02d}"] = f"{record.weekday_cos:.6f}"
@@ -300,6 +351,8 @@ def build_sample_row(
 
     row.update(
         {
+            # hist_* 是历史窗口统计特征。
+            # 它们给 XGBoost 或神经网络提供“全局上下文”，补充逐日序列信息。
             "hist_mean_7": f"{mean(last_7):.6f}",
             "hist_mean_14": f"{mean(last_14):.6f}",
             "hist_mean_30": f"{mean(history_energy):.6f}",
@@ -332,6 +385,8 @@ def build_sample_row(
         }
     )
 
+    # y_energy/y_peak/y_valley 是监督学习目标。
+    # Direct 模型会同时预测 7 天 × 3 类 = 21 个目标。
     for index, record in enumerate(future, start=1):
         row[f"y_energy_d{index:02d}"] = f"{record.energy:.6f}"
 
@@ -354,6 +409,12 @@ def write_supervised_samples(
     input_days: int,
     output_days: int,
 ) -> int:
+    """按用户滑动切分监督学习样本。
+
+    对每个用户使用步长为 1 天的窗口：
+    过去 input_days 天作为历史输入，紧接着 output_days 天作为预测目标。
+    """
+
     records_by_user: dict[str, list[DayRecord]] = {}
     for record in records:
         records_by_user.setdefault(record.user_id, []).append(record)
@@ -368,6 +429,8 @@ def write_supervised_samples(
         for user_id, user_records in sorted(records_by_user.items()):
             max_start = len(user_records) - input_days - output_days + 1
             for start in range(max_start):
+                # 窗口切分必须保持时间顺序，不能随机打乱。
+                # 随机打乱会破坏时间序列预测任务的因果关系。
                 history = user_records[start : start + input_days]
                 future = user_records[start + input_days : start + input_days + output_days]
                 writer.writerow(
@@ -385,6 +448,8 @@ def write_supervised_samples(
 
 
 def parse_args() -> argparse.Namespace:
+    """解析预测预处理命令行参数。"""
+
     data_root = Path(__file__).resolve().parents[1]
     default_source = data_root / "1.2用电查询-用户日冻结-清洗前.csv"
     default_output_dir = Path(__file__).resolve().parent / "output"
@@ -398,6 +463,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """预测预处理脚本入口。"""
+
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 

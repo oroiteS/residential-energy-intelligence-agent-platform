@@ -17,10 +17,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
-    from .data import TransformerForecastDataModule, load_config, resolve_path
+    from .config import load_config, resolve_path
+    from .dataloader import TransformerForecastDataModule
     from .model import TransformerDirectForecaster
 except ImportError:  # 兼容 `python forecast/transformer/test.py`
-    from data import TransformerForecastDataModule, load_config, resolve_path
+    from config import load_config, resolve_path
+    from dataloader import TransformerForecastDataModule
     from model import TransformerDirectForecaster
 
 from forecast.visualization.comparison import generate_comparison_figures
@@ -149,9 +151,9 @@ def test(config_path: Path, checkpoint_path: Path | None = None) -> None:
     print(f"测试指标已保存：{metrics_path}")
 
     # 分组打印 total/peak/valley 指标
-    total_rows = [r for r in rows if r["target"].startswith("y_energy")]
-    peak_rows = [r for r in rows if r["target"].startswith("y_peak")]
-    valley_rows = [r for r in rows if r["target"].startswith("y_valley")]
+    total_rows = [row for row in rows if str(row["target"]).startswith("y_energy")]
+    peak_rows = [row for row in rows if str(row["target"]).startswith("y_peak")]
+    valley_rows = [row for row in rows if str(row["target"]).startswith("y_valley")]
     if total_rows:
         print("\n总用电预测指标：")
         for r in total_rows:

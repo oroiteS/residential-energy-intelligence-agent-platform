@@ -1,30 +1,39 @@
-# 前端工作台
+# Resident Energy Dashboard Frontend
 
-`frontend/` 是居民用电分析系统的 React 前端，负责承载数据集浏览、用电分析、
-节能问答、实时演示入口和报告中心等页面。
+React-based frontend for the resident energy analysis workspace. The application provides dataset management, load analysis views, classification and anomaly inspection, forecasting workflows, assistant chat, and report access on top of the backend API.
 
-## 技术栈
+## Features
 
-- `React 19`
-- `TypeScript`
-- `Vite`
-- `Ant Design`
-- `React Router`
-- `Zustand`
-- `ECharts`
+- Dataset listing, filtering, upload, and detail views
+- Daily, weekly, typical-day, and peak-valley analysis charts
+- Consumption behavior classification results and confidence display
+- Current-window anomaly detection and reason inspection
+- Forecast generation, forecast switching, and forecast summary views
+- Dataset-scoped assistant chat with citation and action panels
+- Report export and download center
 
-## 页面结构
+## Tech Stack
 
-当前主要页面如下：
+| Area | Technology |
+| --- | --- |
+| Framework | React 19 |
+| Language | TypeScript |
+| Build Tool | Vite |
+| UI Library | Ant Design |
+| Routing | React Router |
+| Charts | ECharts via `echarts-for-react` |
+| HTTP Client | Axios |
+| Package Manager | pnpm |
 
-- `/datasets`：数据集中心
-- `/datasets/:datasetId`：单个数据集详情
-- `/chat`：节能问答
-- `/overview`：服务概览与系统配置
-- `/live`：实时演示页
-- `/reports`：报告中心
+## Requirements
 
-## 启动方式
+- Node.js compatible with the versions required by Vite 8 and React 19
+- pnpm
+- A running backend service exposing the `/api/v1` API
+
+The frontend no longer includes a local mock data runtime. All business data is loaded through `src/services/` from the backend API.
+
+## Getting Started
 
 ```bash
 cd frontend
@@ -32,49 +41,131 @@ pnpm install
 pnpm dev
 ```
 
-默认开发地址：
+The development server listens on:
 
 ```text
 http://127.0.0.1:3000
 ```
 
-## 构建命令
+## Scripts
 
-```bash
-pnpm build
-pnpm preview
+| Command | Description |
+| --- | --- |
+| `pnpm dev` | Start the Vite development server |
+| `pnpm build` | Run TypeScript build and create the production bundle |
+| `pnpm lint` | Run ESLint |
+| `pnpm preview` | Preview the production build locally |
+
+## Environment Variables
+
+Use `.env.example` as the reference configuration.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `VITE_BACKEND_BASE_URL` | `http://127.0.0.1:5000` | Backend origin used by the Vite development proxy |
+| `VITE_API_PREFIX` | `/api/v1` | API prefix used by the Axios client |
+
+During development, Vite proxies `/api` requests to `VITE_BACKEND_BASE_URL`. If the backend runs on another port, update `.env.development`.
+
+## Routing
+
+Route metadata is centralized in `src/app/routeMap.ts`. Runtime route rendering lives in `src/app/routes.tsx`.
+
+| Path | Page | Entry File | Feature Module |
+| --- | --- | --- | --- |
+| `/` | Redirects to dataset center | `src/app/routes.tsx` | - |
+| `/datasets` | Dataset center | `src/pages/DatasetsPage.tsx` | Inline page implementation |
+| `/datasets/:datasetId` | Dataset detail | `src/pages/DatasetDetailPage.tsx` | `src/features/dataset-detail/` |
+| `/chat` | Assistant chat | `src/pages/ChatPage.tsx` | Inline page implementation |
+| `/overview` | Service overview | `src/pages/SettingsPage.tsx` | Inline page implementation |
+| `/settings` | Compatibility redirect to overview | `src/app/routes.tsx` | - |
+| `/reports` | Report center | `src/pages/ReportsPage.tsx` | Inline page implementation |
+
+## Project Structure
+
+```text
+src/
+├── app/          App shell, route map, and router configuration
+├── components/   Shared charts and reusable UI components
+├── constants/    Display labels, colors, and fixed mappings
+├── features/     Feature modules for decomposed business workflows
+├── pages/        Route-level page entry components
+├── services/     Backend API access layer
+├── types/        API and domain TypeScript types
+├── utils/        Shared formatting and utility functions
+├── App.tsx       Root application component
+└── main.tsx      React mount entry
 ```
 
-## 环境变量
+Recommended navigation path when looking for a page:
 
-可选环境变量示例见 `frontend/.env.example`。
+```text
+src/app/routeMap.ts
+  -> src/pages/<PageName>.tsx
+  -> src/features/<feature-name>/ when the page has been decomposed
+```
 
-- `VITE_USE_MOCK`
-  - 开发环境下不等于 `false` 时启用本地 mock 数据
-  - 设为 `false` 后调用真实后端接口
-- `VITE_BACKEND_BASE_URL`
-  - Vite 开发代理转发到的后端服务地址
-  - 默认值：`http://127.0.0.1:5000`
-- `VITE_API_PREFIX`
-  - 前端请求 API 的路径前缀
-  - 默认值：`/api/v1`
+## Dataset Detail Feature Module
 
-## 联调说明
+The dataset detail page is decomposed into `src/features/dataset-detail/`:
 
-- 开发服务器会将 `/api` 代理到 `VITE_BACKEND_BASE_URL`
-- 如果后端运行在其它端口，只需要修改 `frontend/.env.development`
+```text
+src/features/dataset-detail/
+├── components/   Analysis, classification, detection, forecast, and report tabs
+├── hooks/        Page data loading, UI state, and user-triggered actions
+└── model/        Chart mappers, forecast windows, and classification view models
+```
 
-## 目录说明
+`src/pages/DatasetDetailPage.tsx` acts as a composition layer. It reads the route parameter, renders page-level layout, and delegates data orchestration to `hooks/` and pure business transformations to `model/`.
 
-- `src/app/`：应用外壳与布局
-- `src/pages/`：页面级组件
-- `src/components/`：图表与通用组件
-- `src/services/`：后端接口封装
-- `src/store/`：本地状态管理
-- `src/mocks/`：mock 数据
-- `src/types/`：领域类型定义
+## Data Flow
 
-## 开发建议
+```mermaid
+flowchart LR
+    accTitle: Frontend Data Flow
+    accDescr: Route-level pages call feature hooks and services. Services communicate with the backend API and return typed domain data to UI components.
 
-- 纯前端联调阶段可先保持 `VITE_USE_MOCK=true`
-- 接真实服务时，优先保证 `backend/` 端口和 `VITE_BACKEND_BASE_URL` 保持一致
+    route["React Router"]
+    page["pages/"]
+    feature["features/"]
+    service["services/dashboard.ts"]
+    backend["Backend API"]
+    ui["components/"]
+
+    route --> page
+    page --> feature
+    feature --> service
+    page --> service
+    service --> backend
+    feature --> ui
+    page --> ui
+```
+
+## Backend Integration
+
+Before running the frontend in development:
+
+1. Start the backend service.
+2. Confirm the backend is listening on the URL configured by `VITE_BACKEND_BASE_URL`.
+3. Confirm the frontend `VITE_API_PREFIX` matches the backend API prefix, normally `/api/v1`.
+
+The Axios client is configured in `src/services/dashboard.ts`. The Vite development proxy is configured in `vite.config.ts`.
+
+## Development Notes
+
+- Use `pnpm`, not `npm`, for dependency management and scripts.
+- Keep route-level components in `src/pages/` thin when possible.
+- Put complex page-specific behavior under `src/features/<feature-name>/`.
+- Put reusable display components under `src/components/`.
+- Put backend API calls under `src/services/`; page components should not hard-code request URLs.
+- `dist/` is generated by `pnpm build` and should not be treated as source.
+- `node_modules/` is generated by `pnpm install` and should not be committed.
+
+## Verification
+
+Run both checks before submitting frontend changes:
+
+```bash
+pnpm lint
+pnpm build
+```

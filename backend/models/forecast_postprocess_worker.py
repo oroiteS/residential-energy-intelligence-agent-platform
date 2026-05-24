@@ -12,6 +12,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+# 限制数值计算库线程数。
+# worker 是短生命周期子进程，避免每次后处理都启动过多 BLAS/OpenMP 线程。
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -20,6 +22,8 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 
 def main() -> int:
+    """预测后处理子进程入口。"""
+
     if len(sys.argv) != 2:
         raise ValueError("预测后处理子进程必须指定任务类型")
 
@@ -33,6 +37,8 @@ def main() -> int:
 
 
 def _run_classification(payload: dict) -> int:
+    """执行未来窗口分类任务并输出 JSON。"""
+
     from models.classification import classify_daily_window
 
     window_rows = _parse_rows(payload.get("window_rows"))
@@ -42,6 +48,8 @@ def _run_classification(payload: dict) -> int:
 
 
 def _run_detection(payload: dict) -> int:
+    """执行未来窗口异常检测任务并输出 JSON。"""
+
     from models.detection import detect_daily_window
 
     window_rows = _parse_rows(payload.get("window_rows"))
@@ -52,6 +60,8 @@ def _run_detection(payload: dict) -> int:
 
 
 def _parse_rows(value) -> list[dict]:
+    """解析父进程传入的日级数据行。"""
+
     if not isinstance(value, list):
         raise ValueError("预测后处理输入 rows 必须为列表")
 

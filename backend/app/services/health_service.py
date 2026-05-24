@@ -9,6 +9,12 @@ from models.common import ARTIFACTS_DIR
 
 
 def get_health_payload() -> dict:
+    """构造健康检查响应。
+
+    健康状态同时检查数据库、模型产物和智能体配置；
+    只要数据库不可用则整体 down，其他依赖缺失时标记为 degraded。
+    """
+
     dependencies = {
         "database": "down",
         "model": _model_status(),
@@ -20,6 +26,8 @@ def get_health_payload() -> dict:
     except Exception:
         dependencies["database"] = "down"
 
+    # 数据库是后端核心依赖。
+    # 模型或智能体不可用时服务仍可启动，但会以 degraded 提醒前端和运维。
     if dependencies["database"] == "up":
         status = "degraded" if any(value != "up" for value in dependencies.values()) else "up"
     else:
@@ -43,6 +51,8 @@ def get_health_payload() -> dict:
 
 
 def _model_status() -> str:
+    """检查分类、检测和预测所需模型产物是否齐全。"""
+
     required_files = [
         ARTIFACTS_DIR / "classification" / "xgboost" / "xgboost_model.json",
         ARTIFACTS_DIR / "classification" / "xgboost" / "label_encoder.pkl",
@@ -56,4 +66,6 @@ def _model_status() -> str:
 
 
 def _agent_status() -> str:
+    """检查智能体问答所需 LLM 配置和依赖是否可用。"""
+
     return "up" if can_use_llm() else "degraded"

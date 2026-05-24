@@ -22,6 +22,7 @@ Dependencies:
 
 import re, os, sys, json, argparse
 from datetime import date
+from typing import Optional, cast
 from reportlab.lib.pagesizes import A4, LETTER
 from reportlab.lib.units import mm
 from reportlab.lib.colors import Color, HexColor, black, white
@@ -31,6 +32,7 @@ from reportlab.platypus import (
     BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer, PageBreak,
     Table, TableStyle, NextPageTemplate, Flowable
 )
+from reportlab.platypus.flowables import Flowable as FlowableType
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -385,7 +387,7 @@ def _font_wrap(text):
         out.append(f"<font name='CJK'>{seg}</font>" if in_cjk else seg)
     return ''.join(out)
 
-def _draw_mixed(c, x, y, text, size, anchor="left", max_w=0):
+def _draw_mixed(c, x, y, text, size, anchor="left", max_w=0) -> float:
     """Draw mixed CJK/Latin text on canvas with font switching.
     If max_w > 0, wrap into multiple lines. Returns bottom y of drawn text."""
     if max_w > 0:
@@ -403,6 +405,7 @@ def _draw_mixed(c, x, y, text, size, anchor="left", max_w=0):
     for font, txt in segs:
         c.setFont(font, size); c.drawString(x, y, txt)
         x += c.stringWidth(txt, font, size)
+    return y
 
 def _measure_mixed(c, text, size):
     """Measure width of mixed CJK/Latin text."""
@@ -532,8 +535,8 @@ class LeftBorderParagraph(Flowable):
         Flowable.__init__(self)
         self._para = para
         self._bc = border_color; self._bw = border_width
-    def wrap(self, aw, ah):
-        w, h = self._para.wrap(aw, ah)
+    def wrap(self, aW, aH):
+        w, h = self._para.wrap(aW, aH)
         self.width = w; self.height = h
         return w, h
     def draw(self):
@@ -1139,7 +1142,7 @@ class PDFBuilder:
 
     def build_toc(self, toc):
         ST = self.ST; ah = self.accent_hex; ink = self.T["ink"]
-        s = [Spacer(1, 15*mm)]
+        s: list[FlowableType] = [Spacer(1, 15*mm)]
         s.append(Paragraph(md_inline("\u76ee    \u5f55", ah), ST['part']))
         s.append(HRule(self.body_w * 0.12, 1, self.T["accent"]))
         s.append(Spacer(1, 8*mm))

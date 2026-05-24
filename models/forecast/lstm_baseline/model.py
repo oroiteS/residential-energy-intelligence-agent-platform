@@ -10,6 +10,12 @@ from torch import nn
 
 
 class ResidualLSTMNet(nn.Module):
+    """LSTM 残差网络。
+
+    网络结构和直接预测 LSTM 类似，但训练目标不是实际电量，
+    而是 actual - XGBoost baseline 的 21 维残差。
+    """
+
     def __init__(
         self,
         *,
@@ -45,6 +51,12 @@ class ResidualLSTMNet(nn.Module):
 
 
 class LSTMResidualForecaster(LightningModule):
+    """PyTorch Lightning 封装的 LSTM 残差预测器。
+
+    训练阶段预测标准化残差；
+    评估阶段会反标准化残差并加回 baseline，得到最终 21 维预测值。
+    """
+
     def __init__(
         self,
         *,
@@ -87,6 +99,8 @@ class LSTMResidualForecaster(LightningModule):
         self.weight_decay = weight_decay
         self.register_buffer("target_mean", torch.tensor(target_mean_list, dtype=torch.float32))
         self.register_buffer("target_scale", torch.tensor(target_scale_list, dtype=torch.float32))
+        self.target_mean: torch.Tensor
+        self.target_scale: torch.Tensor
 
     def forward(self, sequence: torch.Tensor, future: torch.Tensor, static: torch.Tensor) -> torch.Tensor:
         return self.model(sequence, future, static)
